@@ -35,6 +35,8 @@ namespace subs_check.win.gui
         private string nextCheckTime = null;// 用于存储下次检查时间
         string WebUIapiKey = "CMLiussss";
         int downloading = 0;
+        int subscriptionFailureCount = 0; // 订阅链接失败计数器
+        bool hasSwitchedToLocalProxy = false; // 是否已经切换到本地代理模式
         public Form1()
         {
             InitializeComponent();
@@ -713,11 +715,38 @@ namespace subs_check.win.gui
                             {
                                 // 直接访问型：https://bgithub.xyz/用户名/仓库名/...
                                 subUrls[i] = githubProxyURL + githubPath;
+                                Log($"[调试] 原始链接: {subUrls[i]}");
                             }
                             else
                             {
                                 // 代理加速型：https://ghp.ci/https://raw.githubusercontent.com/...
+                                string originalUrl = subUrls[i];
                                 subUrls[i] = githubProxyURL + "raw.githubusercontent.com/" + githubPath;
+                                Log($"[调试] 原始GitHub链接: {originalUrl}");
+                                Log($"[调试] githubProxyURL: {githubProxyURL}");
+                                Log($"[调试] githubPath: {githubPath}");
+                                Log($"[调试] 生成代理链接: {subUrls[i]}");
+
+                                // 修复：移除多余的 /om/ 路径段
+                                if (subUrls[i].Contains("/om/raw.githubusercontent.com/"))
+                                {
+                                    subUrls[i] = subUrls[i].Replace("/om/raw.githubusercontent.com/", "/raw.githubusercontent.com/");
+                                    Log($"[修复] 已移除多余的 /om/ 路径段: {subUrls[i]}");
+                                }
+                                else if (subUrls[i].Contains("/om/"))
+                                {
+                                    // 检查是否在 raw.githubusercontent.com 之后
+                                    int rawIndex = subUrls[i].IndexOf("raw.githubusercontent.com/");
+                                    if (rawIndex > 0)
+                                    {
+                                        int omIndex = subUrls[i].IndexOf("/om/", rawIndex);
+                                        if (omIndex > 0)
+                                        {
+                                            subUrls[i] = subUrls[i].Remove(omIndex, 4); // 移除 "/om/"
+                                            Log($"[修复] 已移除多余的 /om/ 路径段: {subUrls[i]}");
+                                        }
+                                    }
+                                }
                             }
                         }
                         // 如果使用本地代理或GitHub代理不可用，直接使用原生订阅链接，不做任何处理
@@ -1596,6 +1625,10 @@ namespace subs_check.win.gui
                 // 创建进程
                 subsCheckProcess = new Process { StartInfo = startInfo };
 
+                // 重置计数器
+                subscriptionFailureCount = 0;
+                hasSwitchedToLocalProxy = false;
+
                 // 设置输出和错误数据接收事件处理
                 subsCheckProcess.OutputDataReceived += SubsCheckProcess_OutputDataReceived;
                 subsCheckProcess.ErrorDataReceived += SubsCheckProcess_OutputDataReceived;
@@ -1633,6 +1666,11 @@ namespace subs_check.win.gui
                     subsCheckProcess.Kill();
                     subsCheckProcess.WaitForExit();
                     Log("subs-check.exe 已停止");
+                    
+                    // 重置计数器
+                    subscriptionFailureCount = 0;
+                    hasSwitchedToLocalProxy = false;
+                    
                     notifyIcon1.Icon = originalNotifyIcon;
                     button7.Enabled = false;
                     button7.Text = "🔀未启动";
@@ -1653,6 +1691,38 @@ namespace subs_check.win.gui
         {
             if (!string.IsNullOrEmpty(e.Data))
             {
+                // 检测订阅链接失败
+                if (e.Data.Contains("获取订阅链接错误跳过") && !hasSwitchedToLocalProxy)
+                {
+                    subscriptionFailureCount++;
+                    
+                    // 如果失败次数超过5次，自动切换到本地代理模式
+                    if (subscriptionFailureCount >= 5)
+                    {
+                        BeginInvoke(new Action(async () =>
+                        {
+                            hasSwitchedToLocalProxy = true;
+                            Log("⚠️ 检测到GitHub代理访问失败，自动切换到本地代理模式");
+                            
+                            // 自动勾选"使用本地代理"复选框
+                            checkBox6.Checked = true;
+                            disableGitHubProxyGlobal = true;
+                            
+                            // 尝试检测本地代理
+                            bool localProxyDetected = await DetectLocalProxyForConfig();
+                            if (localProxyDetected)
+                            {
+                                Log($"✓ 已切换到本地代理模式: 127.0.0.1:{localProxyPort}");
+                                Log("⚠️ 请重新启动程序以应用新的代理设置");
+                            }
+                            else
+                            {
+                                Log("⚠️ 未检测到本地代理，请确保V2Ray/Clash等代理软件已启动");
+                            }
+                        }));
+                    }
+                }
+
                 // 由于此事件在另一个线程中触发，需要使用 Invoke 在 UI 线程上更新控件
                 BeginInvoke(new Action(() =>
                 {
