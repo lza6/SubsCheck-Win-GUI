@@ -11,6 +11,7 @@ using System.Net.Http;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -29,6 +30,16 @@ namespace subs_check.win.gui
         int localProxyPort = 0; // 存储检测到的本地代理端口
         bool disableGitHubProxyGlobal = false; // 全局禁用GitHub代理设置
         int run = 0;
+
+        // GitHub代理管理相关
+        private GitHubProxyManager proxyManager; // 代理管理器实例
+        private List<ProxyTestResult> availableGitHubProxies = new List<ProxyTestResult>(); // 可用的GitHub代理列表
+        private List<string> allGitHubProxies = new List<string>(); // 所有GitHub代理（包括不可用的）
+        private int lastProxyCheckNodeCount = 0; // 上次检查代理时的节点数
+        private const int PROXY_CHECK_INTERVAL = 50; // 每50个节点检查一次代理状态
+        private const int FULL_PROXY_CHECK_INTERVAL = 1000; // 每1000个节点全面检查所有代理
+        private int lastFullProxyCheckNodeCount = 0; // 上次全面检查代理时的节点数
+        private int currentCheckedNodeCount = 0; // 当前已检测的节点数
         string 当前subsCheck版本号 = "未知版本";
         string 当前GUI版本号 = "未知版本";
         string 最新GUI版本号 = "未知版本";
@@ -41,6 +52,9 @@ namespace subs_check.win.gui
         {
             InitializeComponent();
             originalNotifyIcon = notifyIcon1.Icon;
+
+            // 初始化GitHub代理管理器
+            proxyManager = new GitHubProxyManager(this);
 
             toolTip1.SetToolTip(numericUpDown1, "并发线程数：推荐 宽带峰值/50M。");
             toolTip1.SetToolTip(numericUpDown2, "检查间隔时间(分钟)：放置后台的时候，下次自动测速的间隔时间。\n\n 双击切换 使用「cron表达式」");
@@ -374,6 +388,20 @@ namespace subs_check.win.gui
                                         if (rawIndex >= 0)
                                         {
                                             string actualPath = pathAndQuery.Substring(rawIndex + 23);
+                                            
+                                            // 修复：移除多余的 /om/ 路径段
+                                            if (actualPath.StartsWith("om/"))
+                                            {
+                                                actualPath = actualPath.Substring(3); // 移除 "om/"
+                                                Log($"[配置修复] 已移除URL中的 /om/ 路径段: {actualPath}");
+                                            }
+                                            else if (actualPath.Contains("/om/"))
+                                            {
+                                                // 检查是否有 /om/ 在中间
+                                                actualPath = actualPath.Replace("/om/", "/");
+                                                Log($"[配置修复] 已移除URL中的 /om/ 路径段: {actualPath}");
+                                            }
+                                            
                                             filteredUrls.Add(githubRawPrefix + actualPath);
                                         }
                                         else
@@ -613,6 +641,16 @@ namespace subs_check.win.gui
                 // 保存sub-store-port
                 config["sub-store-port"] = $@":{numericUpDown7.Value}";
 
+                // 初始化GitHub代理管理器的代理列表
+                List<string> proxyItems = new List<string>();
+                for (int j = 0; j < comboBox3.Items.Count; j++)
+                {
+                    string proxyItem = comboBox3.Items[j].ToString();
+                    if (proxyItem != "自动选择")
+                        proxyItems.Add(proxyItem);
+                }
+                proxyManager.SetAllProxies(proxyItems);
+
                 string githubRawPrefix = "https://raw.githubusercontent.com/";
                 bool githubProxyAvailable = false; // 标记GitHub代理是否真正可用
                 bool useLocalProxyMode = disableGitHubProxyGlobal; // 如果全局禁用GitHub代理，直接使用本地代理模式
@@ -622,18 +660,63 @@ namespace subs_check.win.gui
                     // 检查并处理 GitHub Raw URLs
                     if (comboBox3.Text == "自动选择")
                     {
-                        // 创建不包含"自动选择"的代理列表
-                        List<string> proxyItems = new List<string>();
-                        for (int j = 0; j < comboBox3.Items.Count; j++)
+                        // 并发检测所有代理，选择延迟最低的
+                        var availableProxies = new List<ProxyTestResult>();
+                        var allProxiesResults = new List<ProxyTestResult>();
+                        
+                        // 创建检测任务列表
+                        var tasks = new List<Task<ProxyTestResult>>();
+                        foreach (string proxyItem in proxyItems)
                         {
-                            string proxyItem = comboBox3.Items[j].ToString();
-                            if (proxyItem != "自动选择")
-                                proxyItems.Add(proxyItem);
+                            tasks.Add(TestProxyLatency(proxyItem));
                         }
 
-                        // 并发检测所有代理，选择延迟最低的
-                        githubProxyURL = await DetectFastestGitHubProxyAsync(proxyItems);
-                        githubProxyAvailable = !string.IsNullOrEmpty(githubProxyURL);
+                        // 并发执行所有检测任务
+                        var results = await Task.WhenAll(tasks);
+                        
+                        // 批量收集日志消息，避免频繁刷新UI
+                        var logMessages = new System.Text.StringBuilder();
+                        logMessages.AppendLine("代理检测结果:");
+                        
+                        // 收集所有可用代理
+                        foreach (var result in results)
+                        {
+                            allProxiesResults.Add(result);
+                            if (result.IsAvailable)
+                            {
+                                availableProxies.Add(result);
+                                logMessages.AppendLine($"  ✓ {result.ProxyName}: {result.Latency}ms");
+                            }
+                        }
+                        
+                        // 批量输出日志
+                        logMessages.AppendLine($"检测完成：共检测 {results.Length} 个代理，可用 {availableProxies.Count} 个，失败 {results.Length - availableProxies.Count} 个");
+                        richTextBox1.AppendText(logMessages.ToString());
+                        richTextBox1.Refresh();
+                        
+                        // 找到延迟最低的代理
+                        if (availableProxies.Count > 0)
+                        {
+                            var fastestProxy = availableProxies.OrderBy(p => p.Latency).First();
+                            Log($"可用代理延迟排名 ({availableProxies.Count}个):");
+                            foreach (var proxy in availableProxies.OrderBy(p => p.Latency).Take(10))
+                            {
+                                Log($"  - {proxy.ProxyName}: {proxy.Latency}ms");
+                            }
+                            Log($"选择延迟最低的代理: {fastestProxy.ProxyName} ({fastestProxy.Latency}ms)");
+                            
+                            githubProxyURL = fastestProxy.ProxyURL;
+                            githubProxyAvailable = true;
+                            
+                            // 将检测到的可用代理列表保存到代理管理器
+                            proxyManager.SetAvailableProxies(availableProxies);
+                        }
+                        else
+                        {
+                            Log("未找到可用的 GitHub 代理", true);
+                            githubProxyURL = "";
+                            githubProxyAvailable = false;
+                        }
                     }
                     else
                     {
@@ -641,6 +724,13 @@ namespace subs_check.win.gui
                         githubProxyURL = $"https://{comboBox3.Text}/";
                         // 测试指定的代理是否可用
                         githubProxyAvailable = await TestProxyAvailabilityAsync(comboBox3.Text);
+                        
+                        // 将指定的代理添加到可用代理列表
+                        if (githubProxyAvailable)
+                        {
+                            var result = await TestProxyLatency(comboBox3.Text);
+                            proxyManager.SetAvailableProxies(new List<ProxyTestResult> { result });
+                        }
                     }
                 }
 
@@ -715,6 +805,14 @@ namespace subs_check.win.gui
                             {
                                 // 直接访问型：https://bgithub.xyz/用户名/仓库名/...
                                 subUrls[i] = githubProxyURL + githubPath;
+                                
+                                // 修复：移除多余的 /om/ 路径段
+                                if (subUrls[i].Contains("/om/"))
+                                {
+                                    subUrls[i] = subUrls[i].Replace("/om/", "/");
+                                    Log($"[修复] 已移除直接访问型代理中的 /om/ 路径段: {subUrls[i]}");
+                                }
+                                
                                 Log($"[调试] 原始链接: {subUrls[i]}");
                             }
                             else
@@ -731,6 +829,11 @@ namespace subs_check.win.gui
                                 if (subUrls[i].Contains("/om/raw.githubusercontent.com/"))
                                 {
                                     subUrls[i] = subUrls[i].Replace("/om/raw.githubusercontent.com/", "/raw.githubusercontent.com/");
+                                    Log($"[修复] 已移除多余的 /om/ 路径段: {subUrls[i]}");
+                                }
+                                else if (subUrls[i].Contains("raw.githubusercontent.com/om/"))
+                                {
+                                    subUrls[i] = subUrls[i].Replace("raw.githubusercontent.com/om/", "raw.githubusercontent.com/");
                                     Log($"[修复] 已移除多余的 /om/ 路径段: {subUrls[i]}");
                                 }
                                 else if (subUrls[i].Contains("/om/"))
@@ -1670,6 +1773,9 @@ namespace subs_check.win.gui
                     // 重置计数器
                     subscriptionFailureCount = 0;
                     hasSwitchedToLocalProxy = false;
+                    lastProxyCheckNodeCount = 0;
+                    lastFullProxyCheckNodeCount = 0;
+                    currentCheckedNodeCount = 0;
                     
                     notifyIcon1.Icon = originalNotifyIcon;
                     button7.Enabled = false;
@@ -1696,127 +1802,172 @@ namespace subs_check.win.gui
                 {
                     subscriptionFailureCount++;
                     
-                    // 如果失败次数超过5次，自动切换到本地代理模式
-                    if (subscriptionFailureCount >= 5)
+                    // 如果失败次数超过3次，尝试切换GitHub代理
+                    if (subscriptionFailureCount >= 3 && !string.IsNullOrEmpty(githubProxyURL))
                     {
                         BeginInvoke(new Action(async () =>
                         {
-                            hasSwitchedToLocalProxy = true;
-                            Log("⚠️ 检测到GitHub代理访问失败，自动切换到本地代理模式");
+                            Log($"⚠️ 订阅链接获取失败次数已达 {subscriptionFailureCount} 次，尝试切换GitHub代理...");
                             
-                            // 自动勾选"使用本地代理"复选框
-                            checkBox6.Checked = true;
-                            disableGitHubProxyGlobal = true;
-                            
-                            // 尝试检测本地代理
-                            bool localProxyDetected = await DetectLocalProxyForConfig();
-                            if (localProxyDetected)
+                            // 尝试切换到下一个可用代理
+                            bool switched = proxyManager.SwitchToNextProxy();
+                            if (!switched)
                             {
-                                Log($"✓ 已切换到本地代理模式: 127.0.0.1:{localProxyPort}");
-                                Log("⚠️ 请重新启动程序以应用新的代理设置");
+                                Log("⚠️ 没有可用的GitHub代理，无法切换");
                             }
-                            else
-                            {
-                                Log("⚠️ 未检测到本地代理，请确保V2Ray/Clash等代理软件已启动");
-                            }
+                        }));
+                    }
+                    // 如果失败次数超过5次，仅提示用户，不自动切换
+                    else if (subscriptionFailureCount >= 5)
+                    {
+                        BeginInvoke(new Action(() =>
+                        {
+                            Log($"⚠️ 警告：订阅链接获取失败次数已达 {subscriptionFailureCount} 次");
+                            Log("提示：如需使用本地代理模式，请手动勾选「使用本地代理」复选框");
                         }));
                     }
                 }
 
-                // 由于此事件在另一个线程中触发，需要使用 Invoke 在 UI 线程上更新控件
-                BeginInvoke(new Action(() =>
+                // 检查是否是进度信息行
+                if (e.Data.Contains("进度: ["))
                 {
-                    // 过滤ANSI转义序列
-                    string cleanText = RemoveAnsiEscapeCodes(e.Data);
-
-                    // 检查是否包含"下次检查时间"信息
-                    if (cleanText.Contains("下次检查时间:"))
+                    BeginInvoke(new Action(async () =>
                     {
-                        if (button3.Enabled == false)
-                        {
-                            string executablePath = System.IO.Path.GetDirectoryName(System.Windows.Forms.Application.ExecutablePath);
-                            string outputFolderPath = System.IO.Path.Combine(executablePath, "output");
-                            if (System.IO.Directory.Exists(outputFolderPath))
-                            {
-                                string allyamlFilePath = System.IO.Path.Combine(outputFolderPath, "all.yaml");
-                                if (System.IO.File.Exists(allyamlFilePath)) button3.Enabled = true;
-                            }
-                        }
-                        // 提取完整的下次检查时间信息
-                        int startIndex = cleanText.IndexOf("下次检查时间:");
-                        nextCheckTime = cleanText.Substring(startIndex);
-                    }
-
-                    if (!cleanText.StartsWith("[GIN]"))
-                    {
-                        // 如果不是进度行，则添加到日志中
-                        richTextBox1.AppendText(cleanText + "\r\n");
-                        // 滚动到最底部
-                        richTextBox1.SelectionStart = richTextBox1.Text.Length;
-                        richTextBox1.ScrollToCaret();
-                    }
-
-                    /*
-                    // 检查是否是进度信息行
-                    if (cleanText.StartsWith("进度: ["))
-                    {
-                        // 解析百分比
-                        int percentIndex = cleanText.IndexOf('%');
+                        // 解析节点进度信息
+                        int percentIndex = e.Data.IndexOf('%');
                         if (percentIndex > 0)
                         {
                             // 查找百分比前面的数字部分
-                            int startIndex = cleanText.LastIndexOfAny(new char[] { ' ', '>' }, percentIndex) + 1;
-                            string percentText = cleanText.Substring(startIndex, percentIndex - startIndex);
+                            int startIndex = e.Data.LastIndexOfAny(new char[] { ' ', '>' }, percentIndex) + 1;
+                            string percentText = e.Data.Substring(startIndex, percentIndex - startIndex);
 
                             if (double.TryParse(percentText, out double percentValue))
                             {
-                                // 更新进度条，将百分比值（0-100）设置给进度条
+                                // 更新进度条
                                 progressBar1.Value = (int)Math.Round(percentValue);
                             }
                         }
 
                         // 解析节点信息部分（例如：(12/6167) 可用: 0）
-                        int infoStartIndex = cleanText.IndexOf('(');
+                        int infoStartIndex = e.Data.IndexOf('(');
                         if (infoStartIndex > 0)
                         {
-                            string fullNodeInfo = cleanText.Substring(infoStartIndex);
+                            string fullNodeInfo = e.Data.Substring(infoStartIndex);
 
-                            // 提取最重要的信息：节点数量和可用数量
-                            int endIndex = fullNodeInfo.IndexOf("2025-"); // 查找日期部分开始位置
-                            if (endIndex > 0)
+                            // 提取节点数量
+                            Match match = Regex.Match(fullNodeInfo, @"\((\d+)/(\d+)\)");
+                            if (match.Success)
                             {
-                                nodeInfo = fullNodeInfo.Substring(0, endIndex).Trim();
-                            }
-                            else
-                            {
-                                // 如果找不到日期部分，则取前30个字符
-                                nodeInfo = fullNodeInfo.Length > 30 ? fullNodeInfo.Substring(0, 30) + "..." : fullNodeInfo;
-                            }
+                                int currentCount = int.Parse(match.Groups[1].Value);
+                                int totalCount = int.Parse(match.Groups[2].Value);
+                                
+                                currentCheckedNodeCount = currentCount;
 
-                            groupBox2.Text = "实时日志 " + nodeInfo;
+                                // 提取可用数量
+                                int availableIndex = fullNodeInfo.IndexOf("可用:");
+                                if (availableIndex > 0)
+                                {
+                                    string availableText = fullNodeInfo.Substring(availableIndex + 3);
+                                    match = Regex.Match(availableText, @"(\d+)");
+                                    if (match.Success)
+                                    {
+                                        int availableCount = int.Parse(match.Groups[1].Value);
+                                        nodeInfo = $"({currentCount}/{totalCount}) 可用: {availableCount}";
+                                    }
+                                }
+                                else
+                                {
+                                    nodeInfo = $"({currentCount}/{totalCount})";
+                                }
 
-                            // 确保通知图标文本不超过63个字符
-                            string notifyText = "SubsCheck: " + nodeInfo;
-                            if (notifyText.Length > 63)
-                            {
-                                notifyText = notifyText.Substring(0, 60) + "...";
+                                groupBox2.Text = "实时日志 " + nodeInfo;
+
+                                // 更新通知图标文本（限制63字符）
+                                string notifyText = "SubsCheck: " + nodeInfo;
+                                if (notifyText.Length > 63)
+                                {
+                                    notifyText = notifyText.Substring(0, 60) + "...";
+                                }
+                                notifyIcon1.Text = notifyText;
+
+                                // GitHub代理检测机制
+                                if (!string.IsNullOrEmpty(githubProxyURL))
+                                {
+                                    // 每50个节点检查一次当前代理健康状态
+                                    if (currentCount > 0 && currentCount % PROXY_CHECK_INTERVAL == 0 && 
+                                        currentCount != lastProxyCheckNodeCount)
+                                    {
+                                        lastProxyCheckNodeCount = currentCount;
+                                        Log($"🔍 检查当前 GitHub 代理健康状态 (已检测 {currentCount} 个节点)...");
+                                        
+                                        bool isHealthy = await proxyManager.CheckCurrentProxyHealthAsync();
+                                        if (!isHealthy)
+                                        {
+                                            Log("⚠️ 当前 GitHub 代理不可用，正在尝试切换代理...");
+                                            bool switched = proxyManager.SwitchToNextProxy();
+                                            if (!switched)
+                                            {
+                                                Log("⚠️ 没有可用的GitHub代理，切换失败");
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Log("✓ GitHub 代理状态正常");
+                                        }
+                                    }
+
+                                    // 每1000个节点全面检查一次所有GitHub代理
+                                    if (currentCount > 0 && currentCount % FULL_PROXY_CHECK_INTERVAL == 0 && 
+                                        currentCount != lastFullProxyCheckNodeCount)
+                                    {
+                                        lastFullProxyCheckNodeCount = currentCount;
+                                        Log($"🔍 全面检查 GitHub 代理健康状态 (已检测 {currentCount} 个节点)...");
+                                        
+                                        var allAvailableProxies = await proxyManager.CheckAllProxiesHealthAsync();
+                                        if (allAvailableProxies.Count > 0)
+                                        {
+                                            proxyManager.SetAvailableProxies(allAvailableProxies);
+                                        }
+                                    }
+                                }
                             }
-                            notifyIcon1.Text = notifyText;
+                        }
+                    }));
+                }
+                else
+                {
+                    // 不是进度行，过滤ANSI转义序列并添加到日志
+                    BeginInvoke(new Action(() =>
+                    {
+                        string cleanText = RemoveAnsiEscapeCodes(e.Data);
+
+                        // 检查是否包含"下次检查时间"信息
+                        if (cleanText.Contains("下次检查时间:"))
+                        {
+                            if (button3.Enabled == false)
+                            {
+                                string executablePath = System.IO.Path.GetDirectoryName(System.Windows.Forms.Application.ExecutablePath);
+                                string outputFolderPath = System.IO.Path.Combine(executablePath, "output");
+                                if (System.IO.Directory.Exists(outputFolderPath))
+                                {
+                                    string allyamlFilePath = System.IO.Path.Combine(outputFolderPath, "all.yaml");
+                                    if (System.IO.File.Exists(allyamlFilePath)) button3.Enabled = true;
+                                }
+                            }
+                            // 提取完整的下次检查时间信息
+                            int startIndex = cleanText.IndexOf("下次检查时间:");
+                            nextCheckTime = cleanText.Substring(startIndex);
                         }
 
-                        // 更新lastProgressLine，但不向richTextBox添加文本
-                        lastProgressLine = cleanText;
-                    }
-                    else
-                    {
-                        // 如果不是进度行，则添加到日志中
-                        richTextBox1.AppendText(cleanText + "\r\n");
-                        // 滚动到最底部
-                        richTextBox1.SelectionStart = richTextBox1.Text.Length;
-                        richTextBox1.ScrollToCaret();
-                    }
-                    */
-                }));
+                        // 过滤掉GIN框架的日志
+                        if (!cleanText.StartsWith("[GIN]"))
+                        {
+                            richTextBox1.AppendText(cleanText + "\r\n");
+                            richTextBox1.SelectionStart = richTextBox1.Text.Length;
+                            richTextBox1.ScrollToCaret();
+                        }
+                    }));
+                }
             }
         }
 
@@ -4179,6 +4330,181 @@ namespace subs_check.win.gui
                 Log($"本地代理检测异常: {ex.Message}", true);
                 localProxyPort = 0; // 清除本地代理端口
                 return false;
+            }
+        }
+
+        // ==================== GitHub代理管理器 ====================
+        
+        /// <summary>
+        /// GitHub代理管理器 - 负责代理检测、管理和实时切换
+        /// </summary>
+        private class GitHubProxyManager
+        {
+            private Form1 parentForm;
+            private List<ProxyTestResult> availableProxies = new List<ProxyTestResult>();
+            private List<string> allProxies = new List<string>();
+            private string currentProxyURL = "";
+            private int currentIndex = 0;
+            private readonly object lockObj = new object();
+
+            public GitHubProxyManager(Form1 form)
+            {
+                parentForm = form;
+            }
+
+            /// <summary>
+            /// 设置所有代理列表
+            /// </summary>
+            public void SetAllProxies(List<string> proxies)
+            {
+                lock (lockObj)
+                {
+                    allProxies = new List<string>(proxies);
+                }
+            }
+
+            /// <summary>
+            /// 获取所有代理列表
+            /// </summary>
+            public List<string> GetAllProxies()
+            {
+                lock (lockObj)
+                {
+                    return new List<string>(allProxies);
+                }
+            }
+
+            /// <summary>
+            /// 设置可用代理列表
+            /// </summary>
+            public void SetAvailableProxies(List<ProxyTestResult> proxies)
+            {
+                lock (lockObj)
+                {
+                    availableProxies = proxies.OrderBy(p => p.Latency).ToList();
+                    currentProxyURL = availableProxies.Count > 0 ? availableProxies[0].ProxyURL : "";
+                    currentIndex = 0;
+                }
+            }
+
+            /// <summary>
+            /// 获取可用代理列表
+            /// </summary>
+            public List<ProxyTestResult> GetAvailableProxies()
+            {
+                lock (lockObj)
+                {
+                    return new List<ProxyTestResult>(availableProxies);
+                }
+            }
+
+            /// <summary>
+            /// 获取当前代理URL
+            /// </summary>
+            public string GetCurrentProxyURL()
+            {
+                lock (lockObj)
+                {
+                    return currentProxyURL;
+                }
+            }
+
+            /// <summary>
+            /// 设置当前代理URL
+            /// </summary>
+            public void SetCurrentProxyURL(string url)
+            {
+                lock (lockObj)
+                {
+                    currentProxyURL = url;
+                }
+            }
+
+            /// <summary>
+            /// 切换到下一个可用代理（实时切换，无需重启）
+            /// </summary>
+            public bool SwitchToNextProxy()
+            {
+                lock (lockObj)
+                {
+                    if (availableProxies.Count == 0)
+                    {
+                        return false;
+                    }
+
+                    // 移动到下一个代理
+                    currentIndex = (currentIndex + 1) % availableProxies.Count;
+                    
+                    string oldProxy = currentProxyURL;
+                    currentProxyURL = availableProxies[currentIndex].ProxyURL;
+                    
+                    // 更新父窗体的githubProxyURL
+                    parentForm.githubProxyURL = currentProxyURL;
+                    
+                    parentForm.Log($"🔄 GitHub代理已切换: {oldProxy} -> {currentProxyURL} (延迟: {availableProxies[currentIndex].Latency}ms)");
+                    
+                    return true;
+                }
+            }
+
+            /// <summary>
+            /// 检查当前代理是否健康
+            /// </summary>
+            public async Task<bool> CheckCurrentProxyHealthAsync()
+            {
+                lock (lockObj)
+                {
+                    if (string.IsNullOrEmpty(currentProxyURL))
+                    {
+                        return false;
+                    }
+                }
+
+                // 提取代理名称
+                string proxyName = currentProxyURL.Replace("https://", "").Replace("/", "");
+                return await parentForm.TestProxyAvailabilityAsync(proxyName);
+            }
+
+            /// <summary>
+            /// 全面检测所有代理的健康状态
+            /// </summary>
+            public async Task<List<ProxyTestResult>> CheckAllProxiesHealthAsync()
+            {
+                lock (lockObj)
+                {
+                    if (allProxies.Count == 0)
+                    {
+                        return new List<ProxyTestResult>();
+                    }
+                }
+
+                parentForm.Log($"🔍 开始全面检查 {allProxies.Count} 个 GitHub 代理的健康状态...");
+
+                // 创建检测任务列表
+                var tasks = new List<Task<ProxyTestResult>>();
+                foreach (string proxyItem in allProxies)
+                {
+                    tasks.Add(parentForm.TestProxyLatency(proxyItem));
+                }
+
+                // 并发执行所有检测任务
+                var results = await Task.WhenAll(tasks);
+
+                // 过滤出可用的代理
+                var availableProxies = results.Where(r => r.IsAvailable).OrderBy(r => r.Latency).ToList();
+
+                parentForm.Log($"📊 全面检查完成：可用 {availableProxies.Count} 个，失败 {results.Length - availableProxies.Count} 个");
+
+                if (availableProxies.Count > 0)
+                {
+                    parentForm.Log($"可用代理延迟排名 (Top 10):");
+                    foreach (var proxy in availableProxies.Take(10))
+                    {
+                        parentForm.Log($"  - {proxy.ProxyName}: {proxy.Latency}ms");
+                    }
+                }
+
+                return availableProxies;
             }
         }
     }
