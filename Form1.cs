@@ -1183,7 +1183,13 @@ namespace subs_check.win.gui
                 if (moreYamlContent != null)
                     Log($"已将补充参数配置 more.yaml 内容追加到配置文件");
 
-                ConfigService.Save(configFilePath, config, moreYamlContent);
+                // C1 修复：条件字段在"模式关闭"时必须从 config.yaml 删除，
+                // 否则读-改-写会残留旧值，内核按过期 cron 继续调度（旧行为：整体重写键自然消失）
+                var removeKeys = new List<string>();
+                if (!textBox11.Visible) removeKeys.Add("cron-expression");
+                if (checkBox4.Checked) removeKeys.Add("old-api-key");// WebUI 启用态无需旧密钥备份
+
+                ConfigService.Save(configFilePath, config, moreYamlContent, removeKeys);
             }
             catch (Exception ex)
             {
@@ -1911,6 +1917,7 @@ namespace subs_check.win.gui
                 // 重置计数器
                 subscriptionFailureCount = 0;
                 hasSwitchedToLocalProxy = false;
+                unknownLineCount = 0;// R3: 新一轮检测重新统计未知行，保证"每次运行仅提示一次"语义
 
                 // 设置输出和错误数据接收事件处理
                 subsCheckProcess.OutputDataReceived += SubsCheckProcess_OutputDataReceived;
@@ -2120,17 +2127,19 @@ namespace subs_check.win.gui
                             richTextBox1.SelectionStart = richTextBox1.Text.Length;
                             richTextBox1.ScrollToCaret();
                         }
-                    }));
 
-                    // B2: 未知行告警——内核文案变更时留痕。聚合计数、每次运行仅提示一次，避免日志噪声
-                    if (!parsed.IsKnown && !string.IsNullOrWhiteSpace(e.Data))
-                    {
-                        unknownLineCount++;
-                        if (unknownLineCount == 1)
+                        // B2: 未知行告警——内核文案变更时留痕（R3: 落文件不走 UI 富文本，避免"狼来了"；
+                        // C2 修复: 计数与日志均在 BeginInvoke 内，避免跨线程访问）
+                        if (!parsed.IsKnown && !string.IsNullOrWhiteSpace(e.Data))
                         {
-                            Log($"⚠️ 检测到未识别的内核输出（累计已 {unknownLineCount} 行，后续将静默计数；如 subs-check 升级请检查解析器）: {SubsCheckOutputParser.RemoveAnsiEscapeCodes(e.Data).Trim()}");
+                            unknownLineCount++;
+                            if (unknownLineCount == 1)
+                            {
+                                LogService.Write(LogService.LogLevel.Warn,
+                                    $"检测到未识别的内核输出（后续静默计数；如 subs-check 升级请检查 SubsCheckOutputParser.KnownMarkers）: {cleanText.Trim()}");
+                            }
                         }
-                    }
+                    }));
                 }
             }
         }

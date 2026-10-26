@@ -176,3 +176,20 @@ P0/P1 清零 ✅ 构建验证 ✅ 审查闭环 ✅ 文档同步 ✅ HTML 报告+
 | B6 Cron 抽离 | DONE | Services/CronService.cs；Form1 薄委托；Form1.cs 4715→4483 行 |
 - 完整构建: MSBuild sln Debug 通过；冒烟: exe 启动正常
 - 回滚: 各 Service 文件独立，git revert 即可；B5 有运行时开关
+
+## 第五轮：B1-B6 终局审计闭环（2026-10-26 晚）
+
+| 步骤 | 结果 | 证据 |
+|---|---|---|
+| 自我反驳发现：未知行告警噪声 | 已修（聚合计数、单次提示） | Form1.cs unknownLineCount |
+| 自我反驳发现：死方法 RemoveAnsiEscapeCodes | 已删 | diff -8 行 |
+| Release 构建 | PASS | sln 双产出 |
+| 单元测试 | 12/12 | vstest 0.78s |
+| Release 冒烟 | pid=29144 存活 + logs 持久化验证 | bin\Release 运行输出 |
+| README 同步 | 新功能 3 项 + logs/ 目录 + 测试运行说明 | commit 2f907fe |
+| HTML 报告 + 测验 | reports/change-report-20261026-b1b6.html，自测 5/5 (100%) | 报告文件 |
+| 计划文档清理 | 参考的结果计划指南.md 归档删除（manifest 增补） | docs/archive/plans/20261026/ |
+| 技能/记忆 | SOP 增补 4 条坑；memory-summary 增补；evidence/T-100.json | 文件 |
+| 提交 | 2f907fe（19 files, +1290/-294） | git log |
+| 独立审查 | reviewer 子代理进行中，结论待回填 | — |
+| 推送/发布 | 待审查 Approve 后执行 | — |

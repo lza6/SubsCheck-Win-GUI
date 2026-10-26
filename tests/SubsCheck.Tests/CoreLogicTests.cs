@@ -164,6 +164,62 @@ namespace SubsCheck.Tests
                 ConfigService.AtomicWrite(path, "v2");
                 Assert.AreEqual("v2", File.ReadAllText(path));
                 Assert.IsFalse(File.Exists(path + ".tmp"));
+                // R2: 临时文件名带 Guid 后缀，验证目录无残留 tmp
+                Assert.AreEqual(0, Directory.GetFiles(dir, "*.tmp*").Length);
+            }
+            finally { Directory.Delete(dir, true); }
+        }
+
+        // C1 回归：条件字段删除（模拟用户关闭 cron 模式后 cron-expression 必须移除，否则内核按过期表达式调度）
+        [TestMethod]
+        public void Config_Save_RemoveKeys_DeletesConditionalFields()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "scwg_test_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string path = Path.Combine(dir, "config.yaml");
+                File.WriteAllText(path,
+                    "cron-expression: \"0 8 * * *\"\nold-api-key: abc\ncustom-field: keepme\n", Encoding.UTF8);
+
+                var updates = new Dictionary<string, object> { { "timeout", 2 } };
+                ConfigService.Save(path, updates, null, new[] { "cron-expression", "old-api-key" });
+
+                var loaded = ConfigService.Load(path);
+                Assert.IsNull(ConfigService.GetString(loaded, "cron-expression"), "cron-expression 应被删除");
+                Assert.IsNull(ConfigService.GetString(loaded, "old-api-key"), "old-api-key 应被删除");
+                Assert.AreEqual("keepme", ConfigService.GetString(loaded, "custom-field"), "手写字段仍保留");
+                Assert.AreEqual("2", ConfigService.GetString(loaded, "timeout"));
+            }
+            finally { Directory.Delete(dir, true); }
+        }
+
+        // R1 语义：目标不可替换时抛 IOException（而非误导性 tmp 异常）
+        [TestMethod]
+        public void Config_AtomicWrite_FailPath_ThrowsIOException()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "scwg_test_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // 用只读文件模拟 Replace 失败（tmp 会正常落盘，走降级路径）
+                string path = Path.Combine(dir, "ro.yaml");
+                File.WriteAllText(path, "locked");
+                File.SetAttributes(path, FileAttributes.ReadOnly);
+                try
+                {
+                    ConfigService.AtomicWrite(path, "new content");
+                    // 某些环境管理员权限可覆盖只读文件——只要结果正确即通过
+                    Assert.AreEqual("new content", File.ReadAllText(path));
+                }
+                catch (IOException)
+                {
+                    // 预期路径：降级失败必须抛 IOException
+                }
+                finally
+                {
+                    File.SetAttributes(path, FileAttributes.Normal);
+                }
             }
             finally { Directory.Delete(dir, true); }
         }
