@@ -79,13 +79,22 @@ if exist "%VS2019_BUILDTOOLS%" (
     goto :build
 )
 
-rem VS 全部缺失时，最后回退到 PATH 上的 msbuild（Framework MSBuild 可能因 C#5 限制编译失败）
+rem VS 全部缺失时，最后回退到 PATH 上的 msbuild。
+rem 注意：Framework MSBuild（v4.0.30319）的 csc 只支持 C#5，无法编译本项目（C#7 语法），
+rem 命中时显式报错提示安装 VS，而不是让编译进行到一半才失败。
 where msbuild.exe >nul 2>&1
 if %errorlevel% equ 0 (
     for /f "delims=" %%i in ('where msbuild.exe 2^>nul') do (
-        set "MSBUILD_PATH=%%i"
-        goto :build
+        echo %%i | findstr /i "v4.0.30319" >nul
+        if errorlevel 1 (
+            set "MSBUILD_PATH=%%i"
+            goto :build
+        )
     )
+    echo Error: PATH 上的 msbuild 是 Framework 版（仅支持 C#5，无法编译本项目）。
+    echo Please install Visual Studio 2022 or later.
+    pause
+    exit /b 1
 )
 
 echo Error: MSBuild not found. Please install Visual Studio 2022 or later.

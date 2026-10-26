@@ -808,7 +808,7 @@ namespace subs_check.win.gui
                 // 保存enable-web-ui
                 config["enable-web-ui"] = true;
 
-                // 保存listen-port
+                // 保存listen-port（githubProxyCheck=false 为自动路径：内核更新/订阅保存/开机自启，禁止弹窗阻塞）
                 if (checkBox4.Checked)
                 {
                     // 启用 WebUI 但用户未填密钥时，自动生成高熵随机密钥，杜绝固定可猜默认值
@@ -818,9 +818,16 @@ namespace subs_check.win.gui
                         textBox10.Text = WebUIapiKey;
                         textBox10.PasswordChar = '*';
                         textBox10.ForeColor = Color.Black;
-                        MessageBox.Show(
-                            $"您已启用 WebUI 但未设置 API 密钥，已为您生成随机密钥：\n\n{WebUIapiKey}\n\n请妥善保存，修改密钥请点击「生成随机密钥」按钮。",
-                            "已生成随机 API 密钥", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        if (githubProxyCheck)
+                        {
+                            MessageBox.Show(
+                                $"您已启用 WebUI 但未设置 API 密钥，已为您生成随机密钥：\n\n{WebUIapiKey}\n\n请妥善保存，修改密钥请点击「随机密钥」按钮。",
+                                "已生成随机 API 密钥", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                        else
+                        {
+                            Log("已自动生成 WebUI API 随机密钥（自动保存路径，不弹窗）。");
+                        }
                     }
                     else
                     {
