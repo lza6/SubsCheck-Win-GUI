@@ -17,6 +17,7 @@ namespace subs_check.win.gui
         public MoreYAML()
         {
             InitializeComponent();
+            Theme.Apply(this);
 
             
             // 移除文本框的等待光标

@@ -54,6 +54,7 @@
     <Reference Include="System.Deployment" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Net.Http" />
+    <Reference Include="System.Security" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
     <Reference Include="YamlDotNet, Version=16.0.0.0, Culture=neutral, PublicKeyToken=ec19458f3c15af5e, processorArchitecture=MSIL">
@@ -78,6 +79,12 @@
     </Compile>
     <Compile Include="EditURLs.Designer.cs">
       <DependentUpon>EditURLs.cs</DependentUpon>
+    </Compile>
+    <Compile Include="UI\Theme.cs">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="UI\CryptoHelper.cs">
+      <SubType>Code</SubType>
     </Compile>
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>

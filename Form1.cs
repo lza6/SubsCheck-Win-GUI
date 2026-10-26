@@ -44,7 +44,26 @@ namespace subs_check.win.gui
         string 当前GUI版本号 = "未知版本";
         string 最新GUI版本号 = "未知版本";
         private string nextCheckTime = null;// 用于存储下次检查时间
-        string WebUIapiKey = "CMLiussss";
+        string WebUIapiKey = null;
+        // 内核 zip 架构标识：64 位系统下载 x64，32 位系统下载 i386（beck-8/subs-check release 命名）
+        static readonly string SubsCheckArch = Environment.Is64BitOperatingSystem ? "x64" : "i386";
+
+        /// <summary>内核运行状态机。UI 文字（button1.Text）仅是它的展示，不再是状态判据。</summary>
+        enum RunState { Stopped, Running }
+        RunState runState = RunState.Stopped;
+
+        /// <summary>是否正在运行（供托盘菜单、定时器等所有调用方判断，替代 button1.Text 文本判据）。</summary>
+        bool IsRunning => runState == RunState.Running;
+
+        /// <summary>设置运行状态并同步 UI（按钮文字、托盘菜单可用性）。</summary>
+        void SetRunState(RunState state)
+        {
+            runState = state;
+            bool running = state == RunState.Running;
+            button1.Text = running ? "⏹️ 停止" : "▶️ 启动";
+            if (startMenuItem != null) startMenuItem.Enabled = !running;
+            if (stopMenuItem != null) stopMenuItem.Enabled = running;
+        }
         int downloading = 0;
         int subscriptionFailureCount = 0; // 订阅链接失败计数器
         bool hasSwitchedToLocalProxy = false; // 是否已经切换到本地代理模式
@@ -85,8 +104,157 @@ namespace subs_check.win.gui
             toolTip1.SetToolTip(textBox11, "支持标准cron表达式，如：\n 0 */2 * * * 表示每2小时的整点执行\n 0 0 */2 * * 表示每2天的0点执行\n 0 0 1 * * 表示每月1日0点执行\n */30 * * * * 表示每30分钟执行一次\n\n 双击切换 使用「分钟倒计时」");
 
             toolTip1.SetToolTip(checkBox5, "开机启动：勾选后，程序将在Windows启动时自动运行");
+
+            // ===== UI 主题现代化（不影响业务逻辑，只改外观与布局容器） =====
+            ApplyModernUI();
+
             // 设置通知图标的上下文菜单
             SetupNotifyIconContextMenu();
+        }
+
+        // 深浅色切换按钮（放在标题栏旁）
+        private Button themeToggleButton;
+        // 上传配置 Tab 容器
+        private TabControl uploadTabControl;
+
+        /// <summary>
+        /// 应用现代 UI：主题着色 + 上传区块收进 Tab + 深浅色切换。
+        /// 仅调整外观与容器，不改动任何事件绑定与业务逻辑。
+        /// </summary>
+        private void ApplyModernUI()
+        {
+            // 1. 上传三区块收进 TabControl
+            uploadTabControl = new TabControl
+            {
+                Location = new Point(13, 612),
+                Size = new Size(780, 165),
+                TabIndex = 99,
+            };
+            var tabGist = new TabPage("Gist 上传");
+            var tabR2 = new TabPage("R2 上传");
+            var tabWebdav = new TabPage("Webdav 上传");
+
+            // 控件原样迁移到 TabPage（保留原有父容器，只改 Parent）
+            var g4Origin = groupBox4.Bounds;
+            var g5Origin = groupBox5.Bounds;
+            var g6Origin = groupBox6.Bounds;
+            groupBox4.Parent = tabGist;
+            groupBox4.Location = new Point(6, 6);
+            groupBox4.Dock = DockStyle.Fill;
+            groupBox5.Parent = tabR2;
+            groupBox5.Location = new Point(6, 6);
+            groupBox5.Dock = DockStyle.Fill;
+            groupBox6.Parent = tabWebdav;
+            groupBox6.Location = new Point(6, 6);
+            groupBox6.Dock = DockStyle.Fill;
+
+            uploadTabControl.TabPages.AddRange(new[] { tabGist, tabR2, tabWebdav });
+            Controls.Add(uploadTabControl);
+            uploadTabControl.BringToFront();
+
+            // 2. 深浅色切换按钮（右上角，日志标题左侧，避开 linkLabel1）
+            themeToggleButton = new Button
+            {
+                Text = "🌙",
+                Size = new Size(32, 26),
+                Location = new Point(420, 18),
+                TabIndex = 98,
+                Cursor = Cursors.Hand,
+            };
+            themeToggleButton.Click += (s, e) =>
+            {
+                Theme.Toggle();
+                themeToggleButton.Text = Theme.IsDark ? "🌙" : "☀️";
+                Theme.ApplyRecursive(this);
+                themeToggleButton.BackColor = Theme.Current.InputBack;
+            };
+            themeToggleButton.MouseEnter += (s, e) => themeToggleButton.BackColor = Theme.Current.CardBorder;
+            themeToggleButton.MouseLeave += (s, e) => themeToggleButton.BackColor = Theme.Current.InputBack;
+            Controls.Add(themeToggleButton);
+
+            // 3. 高级设置区（groupBox3）展开/收起时避让 Tab：展开下移 Tab，收起还原
+            var originButtonClick = new EventHandler(button2_Click);
+            // 用控件可见性变化挂钩，不改原 button2_Click 逻辑
+            groupBox3.VisibleChanged += (s, e) =>
+            {
+                if (uploadTabControl == null) return;
+                if (groupBox3.Visible)
+                    uploadTabControl.Location = new Point(13, groupBox3.Bottom + 9);
+                else
+                    uploadTabControl.Location = new Point(13, groupBox2.Bottom + 9);
+                ClientSize = new Size(ClientSize.Width, uploadTabControl.Bottom + 13);
+            };
+
+            // Tab 高度按原三区块总高（612→777）设置
+            uploadTabControl.Size = new Size(780, 165);
+
+            // 底部白边修复：AutoSizeMode.GrowAndShrink 在换字体后产生多余客户区
+            AutoSize = false;
+            AutoSizeMode = AutoSizeMode.GrowOnly;
+            // 运行时按 Tab 实际下边缘收紧客户区（AutoScaleMode.Font 会缩放坐标，须用相对定位）
+            Shown += (s, e) =>
+            {
+                BeginInvoke((MethodInvoker)(() =>
+                {
+                    // Tab 紧跟日志区（groupBox2）下方，随缩放自动正确
+                    uploadTabControl.Location = new Point(13, groupBox2.Bottom + 9);
+                    // 无条件按内容收紧客户区，消除底部空白
+                    ClientSize = new Size(ClientSize.Width, uploadTabControl.Bottom + 13);
+                    PerformLayout();
+                }));
+            };
+
+            // 2.5 WebUI API 密钥「生成随机密钥」按钮（运行时代码创建，不改 Designer 文件）
+            var genKeyButton = new Button
+            {
+                Text = "🎲 随机密钥",
+                Size = new Size(110, 23),
+                // 放密钥框下一行并对齐，避开同排的「Clash订阅」按钮（设计器布局已占满该行）
+                Location = new Point(textBox10.Left, textBox10.Bottom + 6),
+                TabIndex = 97,
+                Enabled = checkBox4.Checked,
+                Cursor = Cursors.Hand,
+            };
+            genKeyButton.Click += (s, e) =>
+            {
+                WebUIapiKey = CryptoHelper.GenerateApiKey();
+                textBox10.Text = WebUIapiKey;
+                textBox10.PasswordChar = '*';
+                textBox10.ForeColor = Color.Black;
+                toolTip1.SetToolTip(textBox10, WebUIapiKey);
+                Log("已生成新的 WebUI API 随机密钥，保存配置后生效。");
+            };
+            // 随 WebUI 启用状态联动按钮可用性
+            checkBox4.CheckedChanged += (s, e) => genKeyButton.Enabled = checkBox4.Checked;
+            groupBox3.Controls.Add(genKeyButton);
+
+            // 3. 统一应用主题（先布局后着色，确保新容器一起处理）
+            Controls.Add(progressBar1); // 保持原有层级
+            progressBar1.BringToFront();
+            Theme.Apply(this); // 默认深色，点击 🌙/☀️ 切换
+            // Tab 页与 TabControl 本体底色（消除系统默认白边）
+            foreach (TabPage tp in uploadTabControl.TabPages)
+            {
+                tp.UseVisualStyleBackColor = false;
+                tp.BackColor = Theme.Current.WindowBack;
+            }
+            uploadTabControl.BackColor = Theme.Current.WindowBack;
+            uploadTabControl.BringToFront();
+            themeToggleButton.BringToFront();
+
+            // 4. 按钮语义分级：启动=主色，危险操作=danger，其余=default
+            Theme.StyleButton(button1, "primary");
+            Theme.StyleButton(button4, "default"); // 检查更新
+            Theme.StyleButton(button5, "default"); // 更新内核（隐藏态）
+            Theme.StyleButton(themeToggleButton, "default");
+
+            // 5. 日志区视觉焦点
+            richTextBox1.BackColor = Theme.Current.LogBack;
+            richTextBox1.Font = Theme.FontLog;
+            richTextBox1.BorderStyle = BorderStyle.None;
+
+            // 6. 进度条主题色
+            Theme.ApplyProgressBar(progressBar1);
         }
 
         private void SetupNotifyIconContextMenu()
@@ -98,7 +266,7 @@ namespace subs_check.win.gui
             startMenuItem = new ToolStripMenuItem("启动");
             startMenuItem.Click += (sender, e) =>
             {
-                if (button1.Text == "▶️ 启动")
+                if (!IsRunning)
                 {
                     button1_Click(sender, e);
                 }
@@ -108,7 +276,7 @@ namespace subs_check.win.gui
             stopMenuItem = new ToolStripMenuItem("停止");
             stopMenuItem.Click += (sender, e) =>
             {
-                if (button1.Text == "⏹️ 停止")
+                if (IsRunning)
                 {
                     button1_Click(sender, e);
                 }
@@ -443,7 +611,7 @@ namespace subs_check.win.gui
                     string githubgistid = 读取config字符串(config, "github-gist-id");
                     if (githubgistid != null) textBox2.Text = githubgistid;
                     string githubtoken = 读取config字符串(config, "github-token");
-                    if (githubtoken != null) textBox3.Text = githubtoken;
+                    if (githubtoken != null) textBox3.Text = CryptoHelper.Decrypt(githubtoken);
 
                     string githubapimirror = 读取config字符串(config, "github-api-mirror");
                     if (githubapimirror != null) textBox4.Text = githubapimirror;
@@ -451,12 +619,12 @@ namespace subs_check.win.gui
                     string workerurl = 读取config字符串(config, "worker-url");
                     if (workerurl != null) textBox7.Text = workerurl;
                     string workertoken = 读取config字符串(config, "worker-token");
-                    if (workertoken != null) textBox6.Text = workertoken;
+                    if (workertoken != null) textBox6.Text = CryptoHelper.Decrypt(workertoken);
 
                     string webdavusername = 读取config字符串(config, "webdav-username");
                     if (webdavusername != null) textBox9.Text = webdavusername;
                     string webdavpassword = 读取config字符串(config, "webdav-password");
-                    if (webdavpassword != null) textBox8.Text = webdavpassword;
+                    if (webdavpassword != null) textBox8.Text = CryptoHelper.Decrypt(webdavpassword);
                     string webdavurl = 读取config字符串(config, "webdav-url");
                     if (webdavurl != null) textBox5.Text = webdavurl;
 
@@ -503,7 +671,19 @@ namespace subs_check.win.gui
                         }
                         else
                         {
-                            textBox10.Text = apikey;
+                            // 兼容旧版：检测到公开可猜的固定默认密钥时强制要求重置
+                            if (apikey == "CMLiussss")
+                            {
+                                checkBox4.Checked = false;
+                                textBox10.PasswordChar = '\0';
+                                textBox10.Text = "请输入密钥";
+                                textBox10.ForeColor = Color.Gray;
+                                Log("检测到 WebUI 仍在使用公开可猜的默认密钥，已停用 WebUI，请设置新密钥后重新启用。", true);
+                            }
+                            else
+                            {
+                                textBox10.Text = apikey;
+                            }
                         }
                     }
 
@@ -606,28 +786,42 @@ namespace subs_check.win.gui
                 // 保存save-method，将"本地"转换为"local"
                 config["save-method"] = comboBox1.Text == "本地" ? "local" : comboBox1.Text;
 
-                // 保存gist参数
+                // 保存gist参数（凭据经 DPAPI 加密后落盘，避免明文）
                 config["github-gist-id"] = textBox2.Text;
-                config["github-token"] = textBox3.Text;
+                config["github-token"] = CryptoHelper.Encrypt(textBox3.Text);
 
                 config["github-api-mirror"] = textBox4.Text;
 
                 // 保存r2参数
                 config["worker-url"] = textBox7.Text;
-                config["worker-token"] = textBox6.Text;
+                config["worker-token"] = CryptoHelper.Encrypt(textBox6.Text);
 
                 // 保存webdav参数
                 config["webdav-username"] = textBox9.Text;
-                config["webdav-password"] = textBox8.Text;
+                config["webdav-password"] = CryptoHelper.Encrypt(textBox8.Text);
                 config["webdav-url"] = textBox5.Text;
 
                 // 保存enable-web-ui
                 config["enable-web-ui"] = true;
 
                 // 保存listen-port
-                if (checkBox4.Checked) 
+                if (checkBox4.Checked)
                 {
-                    WebUIapiKey = textBox10.Text;
+                    // 启用 WebUI 但用户未填密钥时，自动生成高熵随机密钥，杜绝固定可猜默认值
+                    if (textBox10.Text == "请输入密钥" || string.IsNullOrWhiteSpace(textBox10.Text))
+                    {
+                        WebUIapiKey = CryptoHelper.GenerateApiKey();
+                        textBox10.Text = WebUIapiKey;
+                        textBox10.PasswordChar = '*';
+                        textBox10.ForeColor = Color.Black;
+                        MessageBox.Show(
+                            $"您已启用 WebUI 但未设置 API 密钥，已为您生成随机密钥：\n\n{WebUIapiKey}\n\n请妥善保存，修改密钥请点击「生成随机密钥」按钮。",
+                            "已生成随机 API 密钥", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    else
+                    {
+                        WebUIapiKey = textBox10.Text;
+                    }
                     config["listen-port"] = $@":{numericUpDown6.Value}";
                 }
                 else
@@ -1029,7 +1223,7 @@ namespace subs_check.win.gui
         private async void button1_Click(object sender, EventArgs e)
         {
             button1.Enabled = false;
-            if (button1.Text == "▶️ 启动") 
+            if (!IsRunning)
             {
                 if (checkBox4.Checked && textBox10.Text == "请输入密钥")
                 {
@@ -1059,19 +1253,16 @@ namespace subs_check.win.gui
                 groupBox5.Enabled = false;
                 groupBox6.Enabled = false;
                 if (checkBox4.Checked) button6.Enabled = true;
-                button1.Text = "⏹️ 停止";
+                SetRunState(RunState.Running);
                 //timer3.Enabled = true;
                 // 清空 richTextBox1
                 richTextBox1.Clear();
                 await KillNodeProcessAsync();
                 await SaveConfig();
 
-                if (run == 1) 
+                if (run == 1)
                 {
-                    // 更新菜单项的启用状态
-                    startMenuItem.Enabled = false;
-                    stopMenuItem.Enabled = true;
-
+                    // 菜单可用性已由下文 SetRunState(RunState.Running) 统一同步
                     // 清空 richTextBox1
                     //richTextBox1.Clear();
 
@@ -1109,11 +1300,10 @@ namespace subs_check.win.gui
                 groupBox5.Enabled = true;
                 groupBox6.Enabled = true;
                 button6.Enabled = false;
-                button1.Text = "▶️ 启动";
+                SetRunState(RunState.Stopped);
                 //timer3.Enabled = false;
                 // 更新菜单项的启用状态
-                startMenuItem.Enabled = true;
-                stopMenuItem.Enabled = false;
+                // （菜单可用性已由 SetRunState 统一同步）
             }
             if (downloading == 0) button1.Enabled = true;
         }
@@ -1178,7 +1368,7 @@ namespace subs_check.win.gui
                             }
 
                             // 直接构造下载链接
-                            string downloadUrl = $"https://github.com/beck-8/subs-check/releases/download/{latestVersion}/subs-check_Windows_i386.zip";
+                            string downloadUrl = $"https://github.com/beck-8/subs-check/releases/download/{latestVersion}/subs-check_Windows_{SubsCheckArch}.zip";
 
                             if (downloadUrl != null)
                             {
@@ -1220,12 +1410,12 @@ namespace subs_check.win.gui
                                     if (proxyType == 1)
                                     {
                                         // 直接访问型：https://bgithub.xyz/beck-8/subs-check/releases/download/v1.4.6/subs-check_Windows_i386.zip
-                                        代理下载链接 = githubProxyURL + "beck-8/subs-check/releases/download/" + latestVersion + "/subs-check_Windows_i386.zip";
+                                        代理下载链接 = githubProxyURL + "beck-8/subs-check/releases/download/" + latestVersion + "/subs-check_Windows_" + SubsCheckArch + ".zip";
                                     }
                                     else
                                     {
                                         // 代理加速型：https://ghp.ci/github.com/beck-8/subs-check/releases/download/v1.4.6/subs-check_Windows_i386.zip
-                                        代理下载链接 = githubProxyURL + "github.com/beck-8/subs-check/releases/download/" + latestVersion + "/subs-check_Windows_i386.zip";
+                                        代理下载链接 = githubProxyURL + "github.com/beck-8/subs-check/releases/download/" + latestVersion + "/subs-check_Windows_" + SubsCheckArch + ".zip";
                                     }
 
                                     // 计算"https://"在下载链接中出现的次数
@@ -1262,7 +1452,7 @@ namespace subs_check.win.gui
                                 }
                                 Log("开始下载文件...");
                                 bool downloadSuccess = false;
-                                string zipFilePath = Path.Combine(executablePath, "subs-check_Windows_i386.zip");
+                                string zipFilePath = Path.Combine(executablePath, "subs-check_Windows_" + SubsCheckArch + ".zip");
                                 string failureReason = "";
 
                                 // 如果文件已存在，先删除
@@ -1619,7 +1809,10 @@ namespace subs_check.win.gui
                                 string errorContent = await response.Content.ReadAsStringAsync();
                                 Log($"错误响应内容: {errorContent}", true);
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                Log($"读取错误响应内容失败: {ex.Message}", true);
+                            }
                         }
                     }
                 }
@@ -1753,7 +1946,7 @@ namespace subs_check.win.gui
             catch (Exception ex)
             {
                 Log($"启动 subs-check.exe 时出错: {ex.Message}", true);
-                button1.Text = "▶️ 启动";
+                SetRunState(RunState.Stopped);
             }
         }
 
@@ -1986,11 +2179,10 @@ namespace subs_check.win.gui
             BeginInvoke(new Action(() =>
             {
                 Log("subs-check.exe 已退出");
-                button1.Text = "▶️ 启动";
+                SetRunState(RunState.Stopped);
 
                 // 更新菜单项的启用状态
-                startMenuItem.Enabled = true;
-                stopMenuItem.Enabled = false;
+                // （菜单可用性已由 SetRunState 统一同步）
 
                 // 重新启用控件
                 numericUpDown1.Enabled = true;
@@ -2936,7 +3128,7 @@ namespace subs_check.win.gui
 
         private async void timer3_Tick(object sender, EventArgs e)
         {
-            if (button1.Text == "⏹️ 停止") 
+            if (IsRunning)
             {
                 Log("subs-check.exe 运行时满24小时，自动重启清理内存占用。");
                 // 停止 subs-check.exe 程序
@@ -2958,7 +3150,7 @@ namespace subs_check.win.gui
                 groupBox4.Enabled = false;
                 groupBox5.Enabled = false;
                 groupBox6.Enabled = false;
-                button1.Text = "⏹️ 停止";
+                SetRunState(RunState.Running);
             }
         }
 
@@ -3784,7 +3976,8 @@ namespace subs_check.win.gui
             catch (Exception ex)
             {
                 Log($"计算计算机名MD5时出错: {ex.Message}", true);
-                return "CMLiussss";
+                // 不再回退到公开可猜的固定密钥，改用随机密钥兜底
+                return CryptoHelper.GenerateApiKey();
             }
         }
 

@@ -26,6 +26,7 @@ namespace subs_check.win.gui
         public CheckUpdates()
         {
             InitializeComponent();
+            Theme.Apply(this);
         }
 
         // 判断代理类型：直接访问型（1）或代理加速型（2）
@@ -62,7 +63,11 @@ namespace subs_check.win.gui
                 {
                     LogCallback(message, isError);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    // 回调失败不能让日志本身抛出异常中断主流程，但要留下痕迹
+                    System.Diagnostics.Debug.WriteLine("LogCallback 失败: " + ex.Message);
+                }
             }
             // 如果没有回调（例如在测试时），可以在这里输出到控制台
             else
@@ -303,7 +308,10 @@ namespace subs_check.win.gui
                                     Log($"错误响应内容: {errorContent.Substring(0, Math.Min(500, errorContent.Length))}", true);
                                 }
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                Log($"读取错误响应内容失败: {ex.Message}", true);
+                            }
                         }
                     }
                 }

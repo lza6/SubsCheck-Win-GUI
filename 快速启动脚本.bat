@@ -16,13 +16,16 @@ if not exist "%PROJECT_FILE%" (
 
 echo Step 1/3: Finding MSBuild...
 
-where msbuild.exe >nul 2>&1
-if %errorlevel% equ 0 (
-    echo Success: MSBuild found in PATH
-    goto :build
-)
+rem 优先探测 Visual Studio 自带 MSBuild。
+rem 注意：PATH 上的 Framework MSBuild（C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe）
+rem 自带 csc 只支持到 C#5，无法编译本项目使用的 C#7 元组与 $ 字符串插值，会报 CS1056。
+rem 因此必须优先使用 VS MSBuild，仅当 VS 全部缺失时才回退到 PATH msbuild。
+set "MSBUILD_PATH="
 
-echo Checking Visual Studio installations...
+set "VS18_COMMUNITY=C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
+set "VS18_PRO=C:\Program Files\Microsoft Visual Studio\18\Professional\MSBuild\Current\Bin\MSBuild.exe"
+set "VS18_ENTERPRISE=C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\MSBuild.exe"
+set "VS18_BUILDTOOLS=C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
 set "VS2022_COMMUNITY=C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
 set "VS2022_PRO=C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe"
 set "VS2022_ENTERPRISE=C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe"
@@ -31,6 +34,22 @@ set "VS2022_COMMUNITY_X86=C:\Program Files (x86)\Microsoft Visual Studio\2022\Co
 set "VS2019_COMMUNITY=C:\Program Files\Microsoft Visual Studio\2019\Community\MSBuild\Current\Bin\MSBuild.exe"
 set "VS2019_BUILDTOOLS=C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
 
+if exist "%VS18_COMMUNITY%" (
+    set "MSBUILD_PATH=%VS18_COMMUNITY%"
+    goto :build
+)
+if exist "%VS18_PRO%" (
+    set "MSBUILD_PATH=%VS18_PRO%"
+    goto :build
+)
+if exist "%VS18_ENTERPRISE%" (
+    set "MSBUILD_PATH=%VS18_ENTERPRISE%"
+    goto :build
+)
+if exist "%VS18_BUILDTOOLS%" (
+    set "MSBUILD_PATH=%VS18_BUILDTOOLS%"
+    goto :build
+)
 if exist "%VS2022_COMMUNITY%" (
     set "MSBUILD_PATH=%VS2022_COMMUNITY%"
     goto :build
@@ -60,7 +79,16 @@ if exist "%VS2019_BUILDTOOLS%" (
     goto :build
 )
 
-echo Error: MSBuild not found. Please install Visual Studio or add MSBuild to PATH.
+rem VS 全部缺失时，最后回退到 PATH 上的 msbuild（Framework MSBuild 可能因 C#5 限制编译失败）
+where msbuild.exe >nul 2>&1
+if %errorlevel% equ 0 (
+    for /f "delims=" %%i in ('where msbuild.exe 2^>nul') do (
+        set "MSBUILD_PATH=%%i"
+        goto :build
+    )
+)
+
+echo Error: MSBuild not found. Please install Visual Studio 2022 or later.
 pause
 exit /b 1
 
@@ -70,7 +98,8 @@ echo.
 
 echo Step 2/4: Restoring NuGet packages...
 
-set "NUGET_EXE=nuget.exe"
+rem 使用脚本所在目录的绝对路径，避免 PATH/codepage 下裸文件名解析失败
+set "NUGET_EXE=%~dp0nuget.exe"
 if not exist "%NUGET_EXE%" (
     echo Downloading NuGet.exe...
     powershell -Command "Invoke-WebRequest -Uri 'https://dist.nuget.org/win-x86-commandline/latest/nuget.exe' -OutFile '%NUGET_EXE%'"

@@ -13,6 +13,7 @@ namespace subs_check.win.gui
         public about()
         {
             InitializeComponent();
+            Theme.Apply(this);
         }
 
         private void button1_Click(object sender, EventArgs e)

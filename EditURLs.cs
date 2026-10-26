@@ -32,6 +32,7 @@ namespace subs_check.win.gui
         public EditURLs()
         {
             InitializeComponent();
+            Theme.Apply(this);
 
             // 设置textBox1的锚点为上、左、右
             textBox1.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
