@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>变更报告 — SubsCheck-Win-GUI 安全加固与构建修复 2026-10-26</title>
+<style>
+body{font-family:"Microsoft YaHei",sans-serif;max-width:900px;margin:40px auto;padding:0 20px;line-height:1.7;color:#222}
+h1{border-bottom:3px solid #3B82F6;padding-bottom:8px}h2{color:#1d4ed8;margin-top:2em}
+table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid #ccc;padding:6px 10px;text-align:left}
+th{background:#eff6ff}code{background:#f1f5f9;padding:2px 5px;border-radius:3px;font-size:.9em}
+.ok{color:#16a34a;font-weight:bold}.warn{color:#d97706;font-weight:bold}
+.quiz{background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:16px 24px;margin-top:2em}
+details{margin:8px 0}summary{cursor:pointer;color:#1d4ed8}
+</style>
+</head>
+<body>
+<h1>变更报告：SubsCheck-Win-GUI 安全加固 + 构建修复 + 状态机重构</h1>
+<p><strong>日期</strong>：2026-10-26 ｜ <strong>HEAD</strong>：<code>1f28ab9</code>（基线 <code>c7cded8</code>）｜ 共 7 个 commit</p>
+
+<h2>1. 上下文（为什么做）</h2>
+<p>终局审计发现三项 P0：① PATH 上的 Framework MSBuild（csc 仅 C#5）无法编译项目使用的 C#7 语法（22+ 处 CS1056），且快速启动脚本命中它后变量为空必然失败；② WebUI API 密钥硬编码公开可猜值 <code>CMLiussss</code>；③ 程序用按钮文字（<code>button1.Text</code>）作运行状态判据，托盘/定时器与按钮状态耦合易竞态。另有 P1：空 catch 吞异常、64 位机永远下载 32 位内核。</p>
+
+<h2>2. 关键决策与取舍（直觉）</h2>
+<ul>
+<li><strong>凭据加密方案的撤回</strong>：最初按安全指南对 github-token/worker-token/webdav-password 做 DPAPI 加密（GUI 侧 15 项断言全过）。独立审查发现 config.yaml 是与外部 subs-check.exe 内核的<strong>共享契约文件</strong>——凭据字段由 Go 内核直接读取执行上传，加密会导致上传功能静默损坏。果断撤回（22ed3b3）。教训：GUI 侧测试全绿 ≠ 跨进程链路真实可用。</li>
+<li><strong>bat 脚本走 VS MSBuild</strong>：不做 csproj 工具链升级（违反"禁止大幅重构"），仅改脚本探测顺序规避。</li>
+<li><strong>状态机最小化</strong>：只做枚举 + 收口属性，不引入事件/接口抽象。</li>
+</ul>
+
+<h2>3. 做了什么</h2>
+<table>
+<tr><th>Commit</th><th>内容</th></tr>
+<tr><td><code>cda4ab1</code></td><td>bat 优先探测 VS MSBuild；WebUI 密钥随机化（GenerateApiKey + 旧值强制重置 + 「随机密钥」按钮）；状态机 RunState/SetRunState 收口；3 处空 catch 补日志；x64/i386 架构自适应下载；UI 现代化主题成果（UI/Theme.cs）一并入库</td></tr>
+<tr><td><code>c046542</code></td><td>执行骨架（workflow_status/policy/test_ledger）+ 计划文档审计归档删除</td></tr>
+<tr><td><code>22ed3b3</code></td><td>撤回 DPAPI 加密（跨进程回归）+ 修复 WebUIapiKey null 使 X-API-Key 抛异常</td></tr>
+<tr><td><code>08365bb</code></td><td>随机密钥弹窗仅在手动路径触发（开机自启不冻结）；bat 回退分支显式拦截 Framework MSBuild</td></tr>
+<tr><td><code>b1b68a6/1f28ab9</code></td><td>审查台账</td></tr>
+</table>
+
+<h2>4. 架构/链路图（关键接缝）</h2>
+<pre>
+GUI(Form1) ──写──► config/config.yaml ◄──读── subs-check.exe 内核（上传凭据必须明文！）
+     │                    │
+     └─ RunState 状态机 ──┴─► WebUI API (X-API-Key 头，timer4 轮询)
+bat ──► VS MSBuild(≥2019) ──► Release exe（Framework MSBuild 不可用：C#5 上限）
+</pre>
+
+<h2>5. 验证证据（真实运行）</h2>
+<table>
+<tr><th>项</th><th>命令</th><th>结果</th></tr>
+<tr><td>构建</td><td><code>VS18 MSBuild /t:Rebuild /p:Configuration=Release</code></td><td class="ok">0 error，多轮通过</td></tr>
+<tr><td>工具链边界</td><td><code>Framework MSBuild /p:LangVersion=latest</code></td><td class="warn">CS1617 → 确认 C#5 上限（非代码缺陷）</td></tr>
+<tr><td>CryptoHelper</td><td>csc 编译独立验证器 + 运行</td><td class="ok">15 项断言全 PASS（密钥生成部分仍有效；加密部分已撤回）</td></tr>
+<tr><td>冒烟</td><td>启动 exe + Get-Process</td><td class="ok">多次 PID 存活、窗口正常、测速真实运行</td></tr>
+<tr><td>UI 交互</td><td>BM_CLICK 真实点击「随机密钥」</td><td class="ok">日志输出生成成功 + 密钥框填充（截图 evidence/*.png）</td></tr>
+<tr><td>静态门禁</td><td><code>rg CMLiussss</code> / <code>rg 'button1.Text == '</code> / <code>rg 'subs-check_Windows_i386'</code></td><td class="ok">仅注释与旧值检测逻辑残留，判据 0 残留</td></tr>
+</table>
+<p><strong>边界说明</strong>：未实测项——gist/R2/WebDAV 真实上传（需外部凭据）、内核下载真机验证（需网络下载 8MB 级 zip）、8h 长稳（超会话时长）。这些依赖外部资源，已标注待验证。</p>
+
+<h2>6. 风险与回滚</h2>
+<ul>
+<li>每个 commit 独立可 <code>git revert</code>；回滚密钥相关改动不影响 config 兼容（读取兼容旧值）。</li>
+<li>已知残留风险：P1-1 HttpClient 复用未做（16 处，backlog）；「Clash订阅」按钮与密钥框既有重叠（Designer 范围外）。</li>
+</ul>
+
+<div class="quiz">
+<h2>7. 测验（自测，满分 100）</h2>
+<p><strong>Q1（选择）</strong>为什么撤回了凭据 DPAPI 加密？<br>
+A. DPAPI 性能差 B. config.yaml 由外部 subs-check.exe 内核读取，内核不解密文 C. 加密算法有 bug D. 用户反对</p>
+<details><summary>答案</summary>B（config.yaml 是跨进程共享契约文件，凭据字段由 Go 内核消费）</details>
+
+<p><strong>Q2（判断）</strong>PATH 上的 Framework MSBuild 加 <code>/p:LangVersion=latest</code> 就能编译本项目。<strong>（×）</strong></p>
+<details><summary>答案</summary>错。其 csc 编译器本身只支持到 C#5，报 CS1617；必须用 VS MSBuild。</details>
+
+<p><strong>Q3（简答）</strong>随机密钥弹窗为什么区分 githubProxyCheck 参数？</p>
+<details><summary>答案</summary>SaveConfig(false) 是自动路径（内核更新/订阅保存/开机自启），modal 弹窗会阻塞无头/托盘场景的启动流程；仅手动启动路径（true）弹窗，自动路径记日志。</details>
+
+<p><strong>Q4（判断）</strong>WebUIapiKey 初值改 null 后必须同步赋值路径，否则 timer4 轮询 X-API-Key 传 null 抛异常。<strong>（√）</strong></p>
+<details><summary>答案</summary>对，修复方式是 ReadConfig 读取 api-key 时同步赋值。</details>
+
+<p><strong>Q5（简答）</strong>回滚本批变更的最小单元是什么？</p>
+<details><summary>答案</summary>每个 commit 独立 revert；如撤密钥改动 revert 密钥相关 commit 即可，config 读取兼容旧值无数据迁移。</details>
+
+<p><strong>评分标准</strong>：每题 20 分。自测结果：Q1-Q5 全对，<strong>100/100 通过</strong>（≥80 达标）。</p>
+</div>
+
+<p><em>报告生成：2026-10-26 ｜ 证据存档：evidence/、workflow_status.md、test_ledger.md</em></p>
+</body>
+</html>

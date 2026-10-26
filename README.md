@@ -63,13 +63,14 @@ SubsCheck-Win-GUI 是基于 [subs-check](https://github.com/beck-8/subs-check) �
 - **Sub-Store**：内置 Sub-Store，支持订阅转换和规则管理
 - **定时任务**：支持定时自动测速，可使用分钟倒计时或 cron 表达式
 - **开机启动**：勾选"开机启动"可设置开机自动运行
+- **WebUI 安全密钥**：启用 WebUI API 密钥时若留空，程序自动生成 32 位高熵随机密钥并弹窗展示（仅手动启动路径）；旧版本的固定默认密钥会被检测并要求重置
 
 ## 文件结构
 
 ```
 SubsCheck-Win-GUI/
 ├── subs-check.win.gui.exe       # GUI 本体
-├── subs-check.exe               # subs-check 内核 (32位)
+├── subs-check.exe               # subs-check 内核 (自动下载：64位系统下 x64，32位系统下 i386)
 ├── config/
 │   ├── config.yaml              # 配置文件
 │   └── more.yaml                # 补充YAML参数配置
@@ -84,7 +85,7 @@ SubsCheck-Win-GUI/
 
 ### 开发环境
 
-- Visual Studio 2019 或更高版本
+- Visual Studio 2019 或更高版本（**必须**：项目使用 C#7 语法，Windows 自带的 Framework MSBuild 的编译器仅支持 C#5，无法编译，请勿使用 PATH 上的 msbuild）
 - .NET Framework 4.7.2
 - NuGet 包管理器
 
