@@ -221,3 +221,14 @@ P0/P1 清零 ✅ 构建验证 ✅ 审查闭环 ✅ 文档同步 ✅ HTML 报告+
 | 技能沉淀补齐 | release-checklist/verification-matrix/plan-doc-audit | .agent/skills/ |
 | bat 脚本验证 | 交互式菜单需 stdin，无法无人值守；MSBuild 探测路径已由等价 PowerShell 验证 | 本节声明 |
 | 盲点扫描 | explorer 子代理进行中，结论待回填 | — |
+
+## 盲点扫描结论与修复（第六轮续，2026-10-26 深夜）
+explorer 扫描 5 方向：无新 P0。已修 3 项高价值（commit 本轮）：
+| 发现 | 处置 |
+|---|---|
+| #3 命名 Job Object 跨实例共用→先崩实例孤儿不被回收 | 已修：匿名 job（CreateJobObject name=null） |
+| #2 removeKeys 误删手写 cron-expression | 已修：cronUiTouched 标记，用户切换过 UI 面板才允许删 |
+| #1 logs/ 只读目录静默降级排障断裂 | 已修：LogService.InitFailed 事件 → UI Log 提示 |
+| #2b YAML 注释丢失 | 已文档化（README 注明 more.yaml 建议）+ KI-8 登记（根治需大改） |
+| #4 轮转占用退化 / #5 ANSI 带参序列 | KI-9/KI-10 登记（边界，无崩溃） |
+验证：Release 构建 0 error + vstest 14/14 + 冒烟 RUNNING OK

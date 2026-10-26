@@ -66,7 +66,8 @@ SubsCheck-Win-GUI 是基于 [subs-check](https://github.com/beck-8/subs-check) �
 - **WebUI 安全密钥**：启用 WebUI API 密钥时若留空，程序自动生成 32 位高熵随机密钥并弹窗展示（仅手动启动路径）；旧版本的固定默认密钥会被检测并要求重置
 - **日志持久化**：运行日志带级别（INF/WRN/ERR）写入 `logs/subscheck-gui.log`，单文件 2MB 自动轮转保留 3 份
 - **配置安全写入**：config.yaml 采用「读-改-写 + 原子替换」，手写补充字段不会被 UI 保存覆盖，写中断不会产生残缺配置
-- **进程监管**：内核 subs-check.exe 绑定 Job Object，GUI 异常退出时内核随之终止，不再产生孤儿进程
+  - ⚠️ 注意：UI 保存会重排 YAML（注释会丢失，这是 YAML 字典读写的固有限制）；**长期手写的自定义键建议放 `config/more.yaml`**（追加模式，永不重排）；手写 `cron-expression` 若未在 UI 面板使用，保存时不会被删除
+- **进程监管**：内核 subs-check.exe 绑定 Job Object（匿名，每实例独立），GUI 异常退出时内核随之终止，不再产生孤儿进程
 
 ## 文件结构
 

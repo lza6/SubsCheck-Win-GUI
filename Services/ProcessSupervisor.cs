@@ -86,7 +86,9 @@ namespace subs_check.win.gui
                 {
                     if (jobHandle == IntPtr.Zero)
                     {
-                        jobHandle = CreateJobObject(IntPtr.Zero, "SubsCheckWinGuiJob");
+                        // 匿名 Job（name=null）：每个 GUI 实例独立持有 Kill-on-Close 句柄；
+                        // 命名 job 会被第二实例打开复用，导致先崩溃实例的孤儿内核不被回收
+                        jobHandle = CreateJobObject(IntPtr.Zero, null);
                         if (jobHandle == IntPtr.Zero) return false;
 
                         var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();

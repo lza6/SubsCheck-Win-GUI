@@ -35,6 +35,7 @@ namespace subs_check.win.gui
         private GitHubProxyManager proxyManager; // 代理管理器实例
         private readonly SubsCheckOutputParser outputParser = new SubsCheckOutputParser(); // B2: 内核输出解析器
         private int unknownLineCount = 0; // B2: 未知内核输出行计数（运行期累计，告警去噪）
+        private bool cronUiTouched = false; // 盲点扫描#2：用户是否切换过 cron 面板（区分"UI 管理的残留"与"用户手写字段"）
         private List<ProxyTestResult> availableGitHubProxies = new List<ProxyTestResult>(); // 可用的GitHub代理列表
         private List<string> allGitHubProxies = new List<string>(); // 所有GitHub代理（包括不可用的）
         private int lastProxyCheckNodeCount = 0; // 上次检查代理时的节点数
@@ -341,6 +342,7 @@ namespace subs_check.win.gui
         private async void timer1_Tick(object sender, EventArgs e)//初始化
         {
             timer1.Enabled = false;
+            LogService.InitFailed += reason => Log(reason, true);// 只读目录（如 Program Files）下排障链路不能静默断裂
             LogService.Init();// B1: 初始化文件日志
             if (button2.Text == "高级设置∧") button2_Click(sender, e);
             // 检查并创建config文件夹
@@ -1185,8 +1187,10 @@ namespace subs_check.win.gui
 
                 // C1 修复：条件字段在"模式关闭"时必须从 config.yaml 删除，
                 // 否则读-改-写会残留旧值，内核按过期 cron 继续调度（旧行为：整体重写键自然消失）
+                // 盲点扫描#2：cron-expression 仅在用户切换过 UI 面板后才允许删除，
+                // 避免误删用户手写但未通过 UI 面板使用的字段（手写意图应放 more.yaml，README 已注）
                 var removeKeys = new List<string>();
-                if (!textBox11.Visible) removeKeys.Add("cron-expression");
+                if (cronUiTouched && !textBox11.Visible) removeKeys.Add("cron-expression");
                 if (checkBox4.Checked) removeKeys.Add("old-api-key");// WebUI 启用态无需旧密钥备份
 
                 ConfigService.Save(configFilePath, config, moreYamlContent, removeKeys);
@@ -3709,6 +3713,7 @@ namespace subs_check.win.gui
 
         private void 切换cron表达式(object sender, EventArgs e)
         {
+            cronUiTouched = true;// 用户主动切换过 cron 面板——之后 Save 才有权删除 cron-expression
             if (textBox11.Visible)
             {
                 textBox11.Visible = false;

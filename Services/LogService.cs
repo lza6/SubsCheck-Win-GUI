@@ -18,7 +18,10 @@ namespace subs_check.win.gui
         private const long MaxFileSizeBytes = 2 * 1024 * 1024; // 单文件 2MB
         private const int MaxBackupFiles = 3;                   // 保留 3 个历史
 
-        /// <summary>初始化日志目录（exe 同级 logs/）。失败时静默降级为仅内存/UI 输出。</summary>
+        /// <summary>日志目录初始化失败时触发（供 UI 提示——日志静默消失会导致排障链路断裂）。参数为失败原因。</summary>
+        public static event Action<string> InitFailed;
+
+        /// <summary>初始化日志目录（exe 同级 logs/）。失败时降级为仅 UI 输出并触发 InitFailed。</summary>
         public static void Init()
         {
             try
@@ -27,9 +30,14 @@ namespace subs_check.win.gui
                 logDirPath = Path.Combine(executablePath, "logs");
                 if (!Directory.Exists(logDirPath)) Directory.CreateDirectory(logDirPath);
             }
-            catch
+            catch (Exception ex)
             {
                 logDirPath = null; // 磁盘不可写等情况：放弃文件持久化
+                var handler = InitFailed;
+                if (handler != null)
+                {
+                    try { handler($"日志文件持久化不可用（{ex.Message}），仅保留界面日志显示。"); } catch { }
+                }
             }
         }
 
