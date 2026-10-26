@@ -611,7 +611,9 @@ namespace subs_check.win.gui
                     string githubgistid = 读取config字符串(config, "github-gist-id");
                     if (githubgistid != null) textBox2.Text = githubgistid;
                     string githubtoken = 读取config字符串(config, "github-token");
-                    if (githubtoken != null) textBox3.Text = CryptoHelper.Decrypt(githubtoken);
+                    // 注意：这些凭据字段由外部 subs-check.exe 内核直接消费（r2/gist/webdav 上传），
+                    // 必须保持明文；内核不解 DPAPI 密文，加密会导致上传功能损坏（v1 回归教训）。
+                    if (githubtoken != null) textBox3.Text = githubtoken;
 
                     string githubapimirror = 读取config字符串(config, "github-api-mirror");
                     if (githubapimirror != null) textBox4.Text = githubapimirror;
@@ -619,12 +621,12 @@ namespace subs_check.win.gui
                     string workerurl = 读取config字符串(config, "worker-url");
                     if (workerurl != null) textBox7.Text = workerurl;
                     string workertoken = 读取config字符串(config, "worker-token");
-                    if (workertoken != null) textBox6.Text = CryptoHelper.Decrypt(workertoken);
+                    if (workertoken != null) textBox6.Text = workertoken;
 
                     string webdavusername = 读取config字符串(config, "webdav-username");
                     if (webdavusername != null) textBox9.Text = webdavusername;
                     string webdavpassword = 读取config字符串(config, "webdav-password");
-                    if (webdavpassword != null) textBox8.Text = CryptoHelper.Decrypt(webdavpassword);
+                    if (webdavpassword != null) textBox8.Text = webdavpassword;
                     string webdavurl = 读取config字符串(config, "webdav-url");
                     if (webdavurl != null) textBox5.Text = webdavurl;
 
@@ -654,6 +656,8 @@ namespace subs_check.win.gui
                     string apikey = 读取config字符串(config, "api-key");
                     if (apikey != null)
                     {
+                        // 同步到运行时字段：timer4 状态轮询的 X-API-Key 依赖此值，不可为 null
+                        WebUIapiKey = apikey;
                         if (apikey == GetComputerNameMD5())
                         {
                             checkBox4.Checked = false;
@@ -786,19 +790,19 @@ namespace subs_check.win.gui
                 // 保存save-method，将"本地"转换为"local"
                 config["save-method"] = comboBox1.Text == "本地" ? "local" : comboBox1.Text;
 
-                // 保存gist参数（凭据经 DPAPI 加密后落盘，避免明文）
+                // 保存gist参数（凭据必须明文：由外部 subs-check.exe 内核消费，内核不解 DPAPI）
                 config["github-gist-id"] = textBox2.Text;
-                config["github-token"] = CryptoHelper.Encrypt(textBox3.Text);
+                config["github-token"] = textBox3.Text;
 
                 config["github-api-mirror"] = textBox4.Text;
 
                 // 保存r2参数
                 config["worker-url"] = textBox7.Text;
-                config["worker-token"] = CryptoHelper.Encrypt(textBox6.Text);
+                config["worker-token"] = textBox6.Text;
 
                 // 保存webdav参数
                 config["webdav-username"] = textBox9.Text;
-                config["webdav-password"] = CryptoHelper.Encrypt(textBox8.Text);
+                config["webdav-password"] = textBox8.Text;
                 config["webdav-url"] = textBox5.Text;
 
                 // 保存enable-web-ui
