@@ -101,6 +101,26 @@ P0/P1 清零 + A1-A7 全过 → 交付。最多 3 轮修复循环。
 ### 核心教训（已入 cerebrum/buglog）
 config/config.yaml 是 GUI 与外部内核的共享契约文件，任何字段改动前必须确认内核消费方。上轮 A3 验收结论「DPAPI 加密已完成」为**伪闭环**（只验证了 GUI 侧往返，未验证跨进程链路），本轮已修正。
 
+## 第三轮：reviewer 复验闭环（2026-10-26）
+
+reviewer 子代理完整报告返回，Verdict: Request Changes（前提 R3 + R2）。
+
+| 审查项 | reviewer 结论 | 处置 |
+|---|---|---|
+| C1 DPAPI 破坏内核 | 成立（P0） | 已修（22ed3b3，R3 入库达成）✅ |
+| C2 WebUIapiKey null | 成立（P1） | 已修（22ed3b3）✅ |
+| R2 弹窗阻塞自动路径 | 成立（开机自启场景 modal 冻结） | **08365bb 修复**：自动路径改记日志 ✅ |
+| R1 Decrypt 异常隔离 | 随加密撤回而消亡 | 不适用（备注留档：未来重做加密必须先修）|
+| R5 bat 回退分支 | 建议显式拦截 Framework MSBuild | **08365bb 修复** ✅ |
+| C/E/G（线程安全/双订阅/bat 语法） | 通过 | — |
+| Suggestions（GenerateApiKey 模偏差/dpapi: 前缀误判） | 低风险 | 记入 backlog，不阻塞 |
+
+**审查闭环达成**：reviewer 合入前提（R3+R2）全部满足，其余改动（状态机/bat/空 catch/架构自适应）判定质量合格可 Approve。
+
+复验：Release Rebuild EXIT=0 + 冒烟 PID=35160 通过。
+
+当前 HEAD：08365bb（未推送，未获授权）。
+
 ---
 
 ## 执行结果（2026-10-26 终局）
