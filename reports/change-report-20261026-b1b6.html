@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>变更报告 — B1-B6 架构改造闭环（2026-10-26）</title>
+<style>
+body{font-family:"Microsoft YaHei",sans-serif;max-width:900px;margin:0 auto;padding:24px;line-height:1.7;color:#222}
+h1{border-bottom:3px solid #2563eb;padding-bottom:8px}
+h2{color:#2563eb;margin-top:32px}
+table{border-collapse:collapse;width:100%;margin:12px 0}
+th,td{border:1px solid #ccc;padding:8px 12px;text-align:left}
+th{background:#eff6ff}
+code,pre{background:#f3f4f6;border-radius:4px;padding:2px 6px}
+pre{padding:12px;overflow-x:auto}
+.pass{color:#16a34a;font-weight:bold}
+.warn{color:#d97706}
+.q{background:#f9fafb;border-left:4px solid #2563eb;padding:8px 12px;margin:8px 0}
+details{margin:8px 0}
+summary{cursor:pointer;font-weight:bold;color:#2563eb}
+</style>
+</head>
+<body>
+<h1>变更报告 — SubsCheck-Win-GUI B1-B6 架构改造闭环</h1>
+<p><b>日期</b>：2026-10-26 ｜ <b>基线</b>：v2.0.2 (4ba5663) ｜ <b>类型</b>：架构分层改造（渐进式，无行为变更）</p>
+
+<h2>1. 上下文（为什么做）</h2>
+<p>v2.0.2 终局审计后，Form1.cs 膨胀至 4715 行，承担 9 类职责：日志仅内存、输出解析内联且无内核文案变更告警、config.yaml 整体重写会覆盖用户手写字段、零测试、GUI 崩溃会留下孤儿内核进程。上游分析报告（六维评分路线图）给出 B1-B6 六个可独立回滚的改造批次，本轮全部落地。</p>
+
+<h2>2. 直觉与关键取舍</h2>
+<ul>
+<li><b>零新运行时依赖</b>：日志库不引入（内置 2MB×3 轮转）；测试用 MSTest（仅测试项目引用），保持便携形态。</li>
+<li><b>薄委托而非调用点全改</b>：Cron/config 读取辅助在 Form1 保留一行委托，调用点零改动，回滚=删文件。</li>
+<li><b>读-改-写优先于 schema 全量建模</b>：ConfigService 以 Dictionary 为中心，手写字段天然保留，避免维护完整配置模型与内核漂移。</li>
+<li><b>未知行告警去噪</b>：审查发现逐行告警会污染日志，改为聚合计数、每次运行仅提示一次。</li>
+</ul>
+
+<h2>3. 做了什么</h2>
+<table>
+<tr><th>批次</th><th>交付物</th><th>回滚方式</th></tr>
+<tr><td>B1 日志</td><td>Services/LogService.cs：INF/WRN/ERR/DBG 级别 + logs/subscheck-gui.log 2MB×3 轮转；Form1.Log 双写</td><td>删文件 + Log 去掉 LogService.Write 一行</td></tr>
+<tr><td>B2 解析器</td><td>Services/SubsCheckOutputParser.cs：进度/下次检查时间/GIN/ANSI 全集中；未知行聚合计数告警</td><td>恢复内联解析（git revert）</td></tr>
+<tr><td>B3 配置</td><td>Services/ConfigService.cs：读-改-写保留手写字段 + File.Replace 原子写（FAT 降级）+ more.yaml 追加</td><td>git revert</td></tr>
+<tr><td>B4 测试</td><td>tests/SubsCheck.Tests（MSTest 2.2.10）12 用例；sln 已挂载</td><td>删除测试项目</td></tr>
+<tr><td>B5 进程监管</td><td>Services/ProcessSupervisor.cs：Kill-on-Close Job Object；DisableJobObject 开关</td><td>开关置 true 或 git revert</td></tr>
+<tr><td>B6 Cron</td><td>Services/CronService.cs；Form1 薄委托；Form1.cs 4715→4481 行</td><td>git revert</td></tr>
+</table>
+
+<h2>4. 架构链路</h2>
+<pre>subs-check.exe stdout ──► SubsCheckOutputParser ──► Form1（UI/状态/代理切换）
+Form1.Log ──► LogService ──► logs/subscheck-gui.log（轮转） + richTextBox1
+Form1.SaveConfig ──► ConfigService.Load（保留手写字段）→ updates 覆盖 → more.yaml 追加 → 原子写
+StartSubsCheckProcess ──► ProcessSupervisor.Assign（Job Object）──► 内核随 GUI 退出
+CronService ◄── Form1 薄委托（校验/描述） ◄── tests 12 用例</pre>
+
+<h2>5. 验证证据</h2>
+<table>
+<tr><th>验证项</th><th>命令</th><th>结果</th></tr>
+<tr><td>Debug 构建</td><td>MSBuild csproj /p:Configuration=Debug</td><td class="pass">PASS（exe 产出）</td></tr>
+<tr><td>Release 全解决方案</td><td>MSBuild sln /p:Configuration=Release</td><td class="pass">PASS（GUI+Tests 双产出）</td></tr>
+<tr><td>单元测试</td><td>vstest /TestAdapterPath:MSTest.TestAdapter</td><td class="pass">12/12 通过（0.78s）</td></tr>
+<tr><td>Release 冒烟</td><td>Start-Process + 6s 存活 + 日志检查</td><td class="pass">pid=29144 存活；logs/subscheck-gui.log 生成且带 INF 级别；无孤儿内核</td></tr>
+<tr><td>配置往返</td><td>Config_ReadModifyWrite_PreservesUnknownFields</td><td class="pass">手写字段 custom-field 保留</td></tr>
+</table>
+<p>完整证据：<code>evidence/T-100.json</code>（含 limitations：覆盖率未测、Job Object 链路未注入式实测）。</p>
+
+<h2>6. 风险与回滚</h2>
+<ul>
+<li><b>风险1</b>：未知行告警初期可能误报非常规内核日志 → 已去噪（计数+单次提示），如需彻底关闭可注释 Form1.cs 告警块。</li>
+<li><b>风险2</b>：YamlDotNet 序列化 Dictionary 的类型标注（类型前缀）可能影响内核解析 → 测试覆盖 bool/int/List 往返；真实 config 冒烟通过（内核未启动验证，标注为边界）。</li>
+<li><b>风险3</b>：Job Object 句柄由 GUI 进程持有，GUI 正常退出时 OS 自动关闭 job → KILL_ON_JOB_CLOSE 触发，属预期行为；P/Invoke 签名经独立审查。</li>
+<li><b>回滚</b>：单 revert 任一 Service commit；B5 有运行时开关 <code>ProcessSupervisor.DisableJobObject=true</code>。</li>
+</ul>
+
+<h2>7. 已知限制</h2>
+<ul>
+<li>覆盖率未测量（.NET Framework 4.7.2 无 coverlet，需 Core 类库迁移）</li>
+<li>内核真实测速链路（含订阅源）未跑全流程，需真实环境</li>
+<li>16 处 new HttpClient 未复用：既有 backlog（中型重构，未授权）</li>
+</ul>
+
+<h2>8. 交付测验（自测）</h2>
+<div class="q"><b>Q1（选择）</b>：用户手工在 config.yaml 加了 <code>custom-field: keepme</code>，GUI 保存后该字段会？<br>A. 被删除 B. 被覆盖为空 C. <b>保留（读-改-写）✔</b> D. 移入 more.yaml</div>
+<details><summary>答案与解析</summary>C。ConfigService.Save 先 Load 现有配置再覆盖 updates 中的键，未提及键原样保留。测试 Config_ReadModifyWrite_PreservesUnknownFields 验证。</details>
+<div class="q"><b>Q2（判断）</b>：GUI 进程被任务管理器强杀后，subs-check.exe 会继续运行成为孤儿进程。</div>
+<details><summary>答案</summary><b>错</b>。ProcessSupervisor 将内核绑定到 KILL_ON_JOB_CLOSE 的 Job Object，GUI 句柄关闭时 OS 终止内核。</details>
+<div class="q"><b>Q3（简答）</b>：内核 subs-check 升级改了输出文案，GUI 如何表现？如何排查？</div>
+<details><summary>答案</summary>解析器将该行标记为 IsKnown=false，首次出现时日志输出一条「⚠️ 检测到未识别的内核输出（聚合计数）」告警（后续静默计数），指引用户在 SubsCheckOutputParser.KnownMarkers 登记新文案。进度/下次检查时间等已知模式不受影响。</details>
+<div class="q"><b>Q4（选择）</b>：B5 需要临时回退旧行为，正确方式？<br>A. 卸载 GUI B. <b>ProcessSupervisor.DisableJobObject = true ✔</b> C. 删除内核 D. 改注册表</div>
+<details><summary>答案</summary>B。运行时开关，无需重编译回滚。</details>
+<div class="q"><b>Q5（判断）</b>：日志文件写满 2MB 后程序会停止记录。</div>
+<details><summary>答案</summary><b>错</b>。RotateIfNeeded 触发 log → log.1 → log.2 → log.3 轮转，最旧丢弃，持续记录。</details>
+
+<p><b>自测成绩：5/5（100%）— 通过</b>（标准 ≥80%）</p>
+</body>
+</html>

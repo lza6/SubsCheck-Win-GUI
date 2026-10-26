@@ -33,6 +33,8 @@ namespace subs_check.win.gui
 
         // GitHub代理管理相关
         private GitHubProxyManager proxyManager; // 代理管理器实例
+        private readonly SubsCheckOutputParser outputParser = new SubsCheckOutputParser(); // B2: 内核输出解析器
+        private int unknownLineCount = 0; // B2: 未知内核输出行计数（运行期累计，告警去噪）
         private List<ProxyTestResult> availableGitHubProxies = new List<ProxyTestResult>(); // 可用的GitHub代理列表
         private List<string> allGitHubProxies = new List<string>(); // 所有GitHub代理（包括不可用的）
         private int lastProxyCheckNodeCount = 0; // 上次检查代理时的节点数
@@ -339,6 +341,7 @@ namespace subs_check.win.gui
         private async void timer1_Tick(object sender, EventArgs e)//初始化
         {
             timer1.Enabled = false;
+            LogService.Init();// B1: 初始化文件日志
             if (button2.Text == "高级设置∧") button2_Click(sender, e);
             // 检查并创建config文件夹
             string executablePath = System.IO.Path.GetDirectoryName(System.Windows.Forms.Application.ExecutablePath);
@@ -431,12 +434,8 @@ namespace subs_check.win.gui
 
                 if (File.Exists(configFilePath))
                 {
-                    // 读取YAML文件内容
-                    string yamlContent = File.ReadAllText(configFilePath);
-
-                    // 使用YamlDotNet解析YAML
-                    var deserializer = new YamlDotNet.Serialization.Deserializer();
-                    var config = deserializer.Deserialize<Dictionary<string, object>>(yamlContent);
+                    // B3: ConfigService 统一解析
+                    var config = ConfigService.Load(configFilePath);
 
                     // 使用新函数获取整数值并设置UI控件
                     int? concurrentValue = 读取config整数(config, "concurrent");
@@ -1177,37 +1176,14 @@ namespace subs_check.win.gui
                 if (checkBox3.Checked) config["success-limit"] = (int)numericUpDown8.Value;
                 else config["success-limit"] = 0;
 
-                // 使用YamlDotNet序列化配置
-                var serializer = new YamlDotNet.Serialization.SerializerBuilder()
-                    .WithIndentedSequences()  // 使序列化结果更易读
-                    .Build();
-
-                string yamlContent = serializer.Serialize(config);
-
-                // 确保配置目录存在
+                // B3: ConfigService 读-改-写——保留手写字段 + more.yaml 追加 + 原子写
                 string configDirPath = Path.GetDirectoryName(configFilePath);
-                if (!Directory.Exists(configDirPath))
-                    Directory.CreateDirectory(configDirPath);
-
-                string moreYamlPath = Path.Combine(configDirPath, "more.yaml");
-                if (File.Exists(moreYamlPath))
-                {
-                    // 读取more.yaml的内容
-                    string moreYamlContent = File.ReadAllText(moreYamlPath);
-
-                    // 确保more.yaml内容以换行开始
-                    if (!moreYamlContent.StartsWith("\n") && !moreYamlContent.StartsWith("\r\n"))
-                    {
-                        yamlContent += "\n"; // 添加换行符作为分隔
-                    }
-
-                    // 将more.yaml的内容追加到要写入的config.yaml内容后
-                    yamlContent += moreYamlContent;
-
+                string moreYamlPath = Path.Combine(configDirPath ?? "", "more.yaml");
+                string moreYamlContent = File.Exists(moreYamlPath) ? File.ReadAllText(moreYamlPath) : null;
+                if (moreYamlContent != null)
                     Log($"已将补充参数配置 more.yaml 内容追加到配置文件");
-                }
-                // 写入YAML文件
-                File.WriteAllText(configFilePath, yamlContent);
+
+                ConfigService.Save(configFilePath, config, moreYamlContent);
             }
             catch (Exception ex)
             {
@@ -1943,6 +1919,12 @@ namespace subs_check.win.gui
                 // 启动进程
                 subsCheckProcess.Start();
 
+                // B5: 绑定 Job Object——GUI 异常退出时内核进程随之终止，杜绝孤儿进程
+                if (ProcessSupervisor.Assign(subsCheckProcess))
+                    Log("已启用进程监管（Job Object）：GUI 退出时将自动终止内核进程。");
+                else if (!ProcessSupervisor.DisableJobObject)
+                    Log("⚠️ 进程监管绑定失败，回退为普通进程管理。", true);
+
                 // 开始异步读取输出
                 subsCheckProcess.BeginOutputReadLine();
                 subsCheckProcess.BeginErrorReadLine();
@@ -2032,57 +2014,28 @@ namespace subs_check.win.gui
                     }
                 }
 
-                // 检查是否是进度信息行
+                // 检查是否是进度信息行（B2: 解析抽离到 SubsCheckOutputParser）
                 if (e.Data.Contains("进度: ["))
                 {
+                    var parsed = outputParser.Parse(e.Data);
                     BeginInvoke(new Action(async () =>
                     {
-                        // 解析节点进度信息
-                        int percentIndex = e.Data.IndexOf('%');
-                        if (percentIndex > 0)
+                        if (parsed.Percent.HasValue)
                         {
-                            // 查找百分比前面的数字部分
-                            int startIndex = e.Data.LastIndexOfAny(new char[] { ' ', '>' }, percentIndex) + 1;
-                            string percentText = e.Data.Substring(startIndex, percentIndex - startIndex);
-
-                            if (double.TryParse(percentText, out double percentValue))
-                            {
-                                // 更新进度条
-                                progressBar1.Value = (int)Math.Round(percentValue);
-                            }
+                            // 更新进度条
+                            progressBar1.Value = (int)Math.Round(parsed.Percent.Value);
                         }
 
-                        // 解析节点信息部分（例如：(12/6167) 可用: 0）
-                        int infoStartIndex = e.Data.IndexOf('(');
-                        if (infoStartIndex > 0)
+                        if (parsed.CurrentCount.HasValue && parsed.TotalCount.HasValue)
                         {
-                            string fullNodeInfo = e.Data.Substring(infoStartIndex);
+                                int currentCount = parsed.CurrentCount.Value;
+                                int totalCount = parsed.TotalCount.Value;
 
-                            // 提取节点数量
-                            Match match = Regex.Match(fullNodeInfo, @"\((\d+)/(\d+)\)");
-                            if (match.Success)
-                            {
-                                int currentCount = int.Parse(match.Groups[1].Value);
-                                int totalCount = int.Parse(match.Groups[2].Value);
-                                
                                 currentCheckedNodeCount = currentCount;
 
-                                // 提取可用数量
-                                int availableIndex = fullNodeInfo.IndexOf("可用:");
-                                if (availableIndex > 0)
-                                {
-                                    string availableText = fullNodeInfo.Substring(availableIndex + 3);
-                                    match = Regex.Match(availableText, @"(\d+)");
-                                    if (match.Success)
-                                    {
-                                        int availableCount = int.Parse(match.Groups[1].Value);
-                                        nodeInfo = $"({currentCount}/{totalCount}) 可用: {availableCount}";
-                                    }
-                                }
-                                else
-                                {
-                                    nodeInfo = $"({currentCount}/{totalCount})";
-                                }
+                                nodeInfo = parsed.AvailableCount.HasValue
+                                    ? $"({currentCount}/{totalCount}) 可用: {parsed.AvailableCount.Value}"
+                                    : $"({currentCount}/{totalCount})";
 
                                 groupBox2.Text = "实时日志 " + nodeInfo;
 
@@ -2135,18 +2088,17 @@ namespace subs_check.win.gui
                                     }
                                 }
                             }
-                        }
                     }));
                 }
                 else
                 {
-                    // 不是进度行，过滤ANSI转义序列并添加到日志
+                    var parsed = outputParser.Parse(e.Data);
                     BeginInvoke(new Action(() =>
                     {
-                        string cleanText = RemoveAnsiEscapeCodes(e.Data);
+                        string cleanText = parsed.CleanText;
 
                         // 检查是否包含"下次检查时间"信息
-                        if (cleanText.Contains("下次检查时间:"))
+                        if (parsed.HasNextCheckTime)
                         {
                             if (button3.Enabled == false)
                             {
@@ -2158,30 +2110,29 @@ namespace subs_check.win.gui
                                     if (System.IO.File.Exists(allyamlFilePath)) button3.Enabled = true;
                                 }
                             }
-                            // 提取完整的下次检查时间信息
-                            int startIndex = cleanText.IndexOf("下次检查时间:");
-                            nextCheckTime = cleanText.Substring(startIndex);
+                            nextCheckTime = parsed.NextCheckTimeText;
                         }
 
                         // 过滤掉GIN框架的日志
-                        if (!cleanText.StartsWith("[GIN]"))
+                        if (!parsed.IsGinLog)
                         {
                             richTextBox1.AppendText(cleanText + "\r\n");
                             richTextBox1.SelectionStart = richTextBox1.Text.Length;
                             richTextBox1.ScrollToCaret();
                         }
                     }));
+
+                    // B2: 未知行告警——内核文案变更时留痕。聚合计数、每次运行仅提示一次，避免日志噪声
+                    if (!parsed.IsKnown && !string.IsNullOrWhiteSpace(e.Data))
+                    {
+                        unknownLineCount++;
+                        if (unknownLineCount == 1)
+                        {
+                            Log($"⚠️ 检测到未识别的内核输出（累计已 {unknownLineCount} 行，后续将静默计数；如 subs-check 升级请检查解析器）: {SubsCheckOutputParser.RemoveAnsiEscapeCodes(e.Data).Trim()}");
+                        }
+                    }
                 }
             }
-        }
-
-
-        // 添加一个方法来过滤ANSI转义序列
-        private string RemoveAnsiEscapeCodes(string input)
-        {
-            // 匹配ANSI转义序列的正则表达式
-            // 这将匹配类似 "[2m"、"[0m"、"[92m" 等格式的ANSI颜色代码
-            return System.Text.RegularExpressions.Regex.Replace(input, @"\x1B\[[0-9;]*[mGK]", string.Empty);
         }
 
         private void SubsCheckProcess_Exited(object sender, EventArgs e)
@@ -2530,9 +2481,12 @@ namespace subs_check.win.gui
 
         private void Log(string message, bool isError = false)
         {
+            // B1: 级别化 + 文件持久化（LogService），UI 输出保持原行为
+            LogService.Write(isError ? LogService.LogLevel.Error : LogService.LogLevel.Info, message);
+
             string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             string logType = isError ? "ERR" : "INF";
-            
+
             // 如果消息包含多行，一次性处理所有行
             string[] lines = message.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
             var output = new System.Text.StringBuilder();
@@ -3732,207 +3686,16 @@ namespace subs_check.win.gui
         /// <returns>如果是合法的cron表达式，则返回true；否则返回false</returns>
         private bool IsValidCronExpression(string cron表达式)
         {
-            string cronExpression = cron表达式.Trim();
-
-            // 如果是空字符串，则不是有效表达式
-            if (string.IsNullOrWhiteSpace(cronExpression))
-                return false;
-
-            // 分割cron表达式为5个部分：分钟 小时 日期 月份 星期
-            string[] parts = cronExpression.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-
-            // cron表达式必须有5个部分
-            if (parts.Length != 5)
-                return false;
-
-            try
-            {
-                // 验证每个部分
-                // 分钟 (0-59)
-                if (!IsValidCronField(parts[0], 0, 59))
-                    return false;
-
-                // 小时 (0-23)
-                if (!IsValidCronField(parts[1], 0, 23))
-                    return false;
-
-                // 日期 (1-31)
-                if (!IsValidCronField(parts[2], 1, 31))
-                    return false;
-
-                // 月份 (1-12)
-                if (!IsValidCronField(parts[3], 1, 12))
-                    return false;
-
-                // 星期 (0-7，0和7都表示星期日)
-                if (!IsValidCronField(parts[4], 0, 7))
-                    return false;
-
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+            // B6: 逻辑已抽离到 CronService（可独立测试），此处保留薄委托
+            return CronService.IsValid(cron表达式);
         }
 
         /// <summary>
-        /// 验证cron表达式中的单个字段是否合法
+        /// 获取cron表达式的友好文本说明（B6: 逻辑已抽离到 CronService，此处保留薄委托）
         /// </summary>
-        /// <param name="field">字段值</param>
-        /// <param name="min">最小允许值</param>
-        /// <param name="max">最大允许值</param>
-        /// <returns>如果字段合法，则返回true；否则返回false</returns>
-        private bool IsValidCronField(string field, int min, int max)
-        {
-            // 处理通配符 "*"
-            if (field == "*")
-                return true;
-
-            // 处理步长 "*/n"
-            if (field.StartsWith("*/"))
-            {
-                string stepStr = field.Substring(2);
-                if (int.TryParse(stepStr, out int step))
-                    return step > 0 && step <= max;
-                return false;
-            }
-
-            // 处理范围 "n-m"
-            if (field.Contains("-"))
-            {
-                string[] range = field.Split('-');
-                if (range.Length != 2)
-                    return false;
-
-                if (int.TryParse(range[0], out int start) && int.TryParse(range[1], out int end))
-                    return start >= min && end <= max && start <= end;
-                return false;
-            }
-
-            // 处理列表 "n,m,k"
-            if (field.Contains(","))
-            {
-                string[] values = field.Split(',');
-                foreach (string item in values)
-                {
-                    if (!int.TryParse(item, out int itemValue) || itemValue < min || itemValue > max)
-                        return false;
-                }
-                return true;
-            }
-
-            // 处理单个数字
-            if (int.TryParse(field, out int fieldValue))
-                return fieldValue >= min && fieldValue <= max;
-
-            return false;
-        }
-
-        /// <summary>
-        /// 获取cron表达式的友好文本说明
-        /// </summary>
-        /// <param name="cron表达式">要解析的cron表达式</param>
-        /// <returns>返回cron表达式的执行时间说明</returns>
         private string GetCronExpressionDescription(string cron表达式)
         {
-            try
-            {
-                string cronExpression = cron表达式.Trim();
-                string[] parts = cronExpression.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-
-                if (parts.Length != 5)
-                    return "无效的cron表达式";
-
-                // 分别解析每个部分
-                string minuteDesc = ParseCronPart(parts[0], "分钟", 0, 59);
-                string hourDesc = ParseCronPart(parts[1], "小时", 0, 23);
-                string dayDesc = ParseCronPart(parts[2], "日", 1, 31);
-                string monthDesc = ParseCronPart(parts[3], "月", 1, 12);
-                string weekDesc = ParseCronPart(parts[4], "星期", 0, 7, true);
-
-                // 组合最终说明
-                string description = "执行时间: ";
-
-                // 月份
-                if (monthDesc != "每月")
-                    description += monthDesc + "的";
-
-                // 星期与日期的关系
-                if (parts[2] == "*" && parts[4] != "*")
-                    description += weekDesc + "的";
-                else if (parts[2] != "*" && parts[4] == "*")
-                    description += dayDesc;
-                else if (parts[2] != "*" && parts[4] != "*")
-                    description += $"{dayDesc}或{weekDesc}";
-                else
-                    description += "每天";
-
-                // 时间（小时:分钟）
-                description += $"{hourDesc}{minuteDesc}";
-
-                return description;
-            }
-            catch
-            {
-                return "无法解析cron表达式";
-            }
-        }
-
-        /// <summary>
-        /// 解析cron表达式的单个部分
-        /// </summary>
-        private string ParseCronPart(string part, string unit, int min, int max, bool isWeekday = false)
-        {
-            // 处理星号，表示每个时间单位
-            if (part == "*")
-            {
-                return $"每{unit}";
-            }
-
-            // 处理步长 */n
-            if (part.StartsWith("*/"))
-            {
-                int step = int.Parse(part.Substring(2));
-                return $"每{step}{unit}";
-            }
-
-            // 处理范围 n-m
-            if (part.Contains("-"))
-            {
-                string[] range = part.Split('-');
-                int start = int.Parse(range[0]);
-                int end = int.Parse(range[1]);
-
-                if (isWeekday)
-                {
-                    string[] weekdays = { "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日" };
-                    return $"从{weekdays[start]}到{weekdays[end]}";
-                }
-
-                return $"从{start}{unit}到{end}{unit}";
-            }
-
-            // 处理列表 n,m,k
-            if (part.Contains(","))
-            {
-                string[] values = part.Split(',');
-                if (isWeekday)
-                {
-                    string[] weekdays = { "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日" };
-                    return string.Join("、", values.Select(v => weekdays[int.Parse(v)]));
-                }
-                return $"{string.Join("、", values)}{unit}";
-            }
-
-            // 处理单个数字
-            int value = int.Parse(part);
-            if (isWeekday)
-            {
-                string[] weekdays = { "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日" };
-                return weekdays[value];
-            }
-            return $"{value}{unit}";
+            return CronService.Describe(cron表达式);
         }
 
         private void 切换cron表达式(object sender, EventArgs e)

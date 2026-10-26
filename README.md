@@ -64,6 +64,9 @@ SubsCheck-Win-GUI 是基于 [subs-check](https://github.com/beck-8/subs-check) �
 - **定时任务**：支持定时自动测速，可使用分钟倒计时或 cron 表达式
 - **开机启动**：勾选"开机启动"可设置开机自动运行
 - **WebUI 安全密钥**：启用 WebUI API 密钥时若留空，程序自动生成 32 位高熵随机密钥并弹窗展示（仅手动启动路径）；旧版本的固定默认密钥会被检测并要求重置
+- **日志持久化**：运行日志带级别（INF/WRN/ERR）写入 `logs/subscheck-gui.log`，单文件 2MB 自动轮转保留 3 份
+- **配置安全写入**：config.yaml 采用「读-改-写 + 原子替换」，手写补充字段不会被 UI 保存覆盖，写中断不会产生残缺配置
+- **进程监管**：内核 subs-check.exe 绑定 Job Object，GUI 异常退出时内核随之终止，不再产生孤儿进程
 
 ## 文件结构
 
@@ -78,6 +81,8 @@ SubsCheck-Win-GUI/
 │   ├── all.yaml                 # YAML格式测试结果
 │   ├── base64.txt               # Base64格式测试结果
 │   └── ...                      # 其他输出文件
+├── logs/
+│   └── subscheck-gui.log        # GUI 运行日志（自动轮转）
 └── README.md                    # 项目说明文档
 ```
 
@@ -93,12 +98,21 @@ SubsCheck-Win-GUI/
 
 - Newtonsoft.Json 13.0.3
 - YamlDotNet 16.3.0
+- MSTest.TestFramework 2.2.10（仅测试项目）
 
 ### 构建步骤
 
 1. 使用 Visual Studio 打开 `subs-check.win.gui.sln`
 2. 选择 Release 或 Debug 配置
 3. 点击"生成解决方案"
+
+### 运行单元测试
+
+命令行方式（需 VS 安装）：
+
+```powershell
+& "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Extensions\TestPlatform\vstest.console.exe" "tests\SubsCheck.Tests\bin\Debug\SubsCheck.Tests.dll" /TestAdapterPath:"packages\MSTest.TestAdapter\build\_common"
+```
 
 ## 致谢
 

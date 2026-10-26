@@ -164,3 +164,15 @@ P0/P1 清零 ✅ 构建验证 ✅ 审查闭环 ✅ 文档同步 ✅ HTML 报告+
 
 ### Git
 - commit cda4ab1（含 UI 现代化成果一并保护入库），未推送（未获授权）
+
+## Implementation Log (B1-B6 落地 2026-10-26)
+| 批次 | 状态 | 证据 |
+|---|---|---|
+| B1 日志持久化 | DONE | Services/LogService.cs；Form1.Log 双写；冒烟 logs/subscheck-gui.log 生成 |
+| B2 解析器抽离 | DONE | Services/SubsCheckOutputParser.cs；未知行告警接入 OutputDataReceived |
+| B3 配置读-改-写+原子写 | DONE | Services/ConfigService.cs；SaveConfig/ReadConfig 改走服务；测试保留手写字段通过 |
+| B4 测试项目 | DONE | tests/SubsCheck.Tests（MSTest 2.2.10）；vstest 12/12 通过 |
+| B5 Job Object | DONE | Services/ProcessSupervisor.cs；StartSubsCheckProcess 绑定（DisableJobObject 可回退） |
+| B6 Cron 抽离 | DONE | Services/CronService.cs；Form1 薄委托；Form1.cs 4715→4483 行 |
+- 完整构建: MSBuild sln Debug 通过；冒烟: exe 启动正常
+- 回滚: 各 Service 文件独立，git revert 即可；B5 有运行时开关

@@ -1,0 +1,66 @@
+{
+  "task_id": "T-100",
+  "status": "passed",
+  "timestamp": "2026-10-26T23:00:00+08:00",
+  "description": "B1-B6 改造批次终局闭环：构建/测试/冒烟/审查",
+  "commands_executed": [
+    {
+      "cmd": "MSBuild subs-check.win.gui.csproj /p:Configuration=Debug /v:m",
+      "exit_code": 0,
+      "raw_output_tail": "subs-check.win.gui -> bin\\Debug\\subs-check.win.gui.exe"
+    },
+    {
+      "cmd": "MSBuild subs-check.win.gui.sln /p:Configuration=Release /v:m",
+      "exit_code": 0,
+      "raw_output_tail": "subs-check.win.gui -> bin\\Release\\subs-check.win.gui.exe; SubsCheck.Tests -> bin\\Release\\SubsCheck.Tests.dll"
+    },
+    {
+      "cmd": "vstest.console.exe tests\\SubsCheck.Tests\\bin\\Debug\\SubsCheck.Tests.dll /TestAdapterPath:packages\\MSTest.TestAdapter\\build\\_common",
+      "exit_code": 0,
+      "raw_output_tail": "测试运行成功。测试总数: 12 通过数: 12 总时间: 0.7795 秒"
+    },
+    {
+      "cmd": "Start-Process bin\\Release\\subs-check.win.gui.exe; sleep 6; orphan check",
+      "exit_code": 0,
+      "raw_output_tail": "RUNNING OK pid=29144; log tail: INF 开始检测本地代理... ✓ 本地代理检测成功: 127.0.0.1:10808; logs/subscheck-gui.log 生成；无孤儿 subs-check 进程"
+    }
+  ],
+  "files_changed": [
+    "Form1.cs",
+    "Services/LogService.cs",
+    "Services/SubsCheckOutputParser.cs",
+    "Services/ConfigService.cs",
+    "Services/ProcessSupervisor.cs",
+    "Services/CronService.cs",
+    "tests/SubsCheck.Tests/CoreLogicTests.cs",
+    "tests/SubsCheck.Tests/SubsCheck.Tests.csproj",
+    "subs-check.win.gui.sln",
+    "subs-check.win.gui.csproj",
+    "packages.config",
+    "README.md"
+  ],
+  "tests": [
+    { "name": "Cron_Valid_ShouldPass", "type": "unit", "status": "passed", "evidence": "vstest 输出" },
+    { "name": "Cron_Invalid_ShouldFail", "type": "unit", "status": "passed", "evidence": "vstest 输出" },
+    { "name": "Cron_Describe_KnownOutputs", "type": "unit", "status": "passed", "evidence": "vstest 输出（基线修正：旧版对 * 输出'每天每小时'前缀为预期）" },
+    { "name": "Parser_ProgressLine_ShouldExtractAllFields", "type": "unit", "status": "passed", "evidence": "vstest 输出" },
+    { "name": "Parser_NextCheckTime_ShouldExtract", "type": "unit", "status": "passed", "evidence": "vstest 输出" },
+    { "name": "Parser_GinLog_ShouldBeFiltered", "type": "unit", "status": "passed", "evidence": "vstest 输出" },
+    { "name": "Parser_UnknownLine_ShouldBeFlagged", "type": "unit", "status": "passed", "evidence": "vstest 输出" },
+    { "name": "Parser_AnsiRemoval", "type": "unit", "status": "passed", "evidence": "vstest 输出" },
+    { "name": "Config_ReadModifyWrite_PreservesUnknownFields", "type": "unit", "status": "passed", "evidence": "vstest 输出" },
+    { "name": "Config_MoreYaml_Appended", "type": "unit", "status": "passed", "evidence": "vstest 输出" },
+    { "name": "Config_Getters", "type": "unit", "status": "passed", "evidence": "vstest 输出" },
+    { "name": "Config_AtomicWrite_NoTmpLeftover", "type": "unit", "status": "passed", "evidence": "vstest 输出" },
+    { "name": "Release build smoke", "type": "smoke", "status": "passed", "evidence": "pid=29144 存活 + 日志文件生成" }
+  ],
+  "coverage_summary": { "lines": null, "branches": null, "functions": null, "statements": null },
+  "seams_touched": ["S1 GUI→config.yaml", "S2 GUI→subs-check.exe", "S5 配置读取"],
+  "mock_scenarios_covered": [],
+  "browser_validation": { "performed": false, "paths": [], "screenshots": [] },
+  "limitations": [
+    "覆盖率未测量（.NET Framework 4.7.2 无 coverlet 支持，需 Core 类库迁移后可测）",
+    "Job Object 实际终止链路（GUI 被强杀→内核随之退出）未做注入式实测，签名经独立审查核对",
+    "内核真实测速全流程需订阅环境，未在本轮跑完整链路"
+  ]
+}
