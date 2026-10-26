@@ -206,3 +206,18 @@ P0/P1 清零 ✅ 构建验证 ✅ 审查闭环 ✅ 文档同步 ✅ HTML 报告+
 | 发布 | tag v2.1.0 + Release | https://github.com/lza6/SubsCheck-Win-GUI/releases/tag/v2.1.0 |
 
 ## 最终状态：B1-B6 全闭环 + 审查 Approve + 已发布
+
+## 技能检查记录（第六轮增量审计 2026-10-26 深夜）
+- 本地技能：.agent/skills/project-audit-sop.md（已有）+ 本轮新增 release-checklist / verification-matrix / plan-doc-audit
+- 无需联网安装：C#/WinForms 技术栈由本地 SOP + MSBuild/vstest 内置流程覆盖
+- 记忆读取：memory-summary（v2.1.0 全量）→ 无过时项；文档债（test_ledger 过期、记忆文件缺失）为本轮修复对象
+
+## 第六轮：增量审计——台账/记忆/技能补齐
+| 项 | 结果 | 证据 |
+|---|---|---|
+| HEAD 复验 | Release 构建 0 error + vstest 14/14 | 本轮 PowerShell 输出 |
+| test_ledger 接缝更新 | S1/S2/S5 → v2.1.0 locked（B1-B6 触达后复测标记） | test_ledger.md |
+| 记忆体系补齐 | known-issues(7项)/verified-scope/decisions(6条)/audit-history(3轮) | .agent/memory/ |
+| 技能沉淀补齐 | release-checklist/verification-matrix/plan-doc-audit | .agent/skills/ |
+| bat 脚本验证 | 交互式菜单需 stdin，无法无人值守；MSBuild 探测路径已由等价 PowerShell 验证 | 本节声明 |
+| 盲点扫描 | explorer 子代理进行中，结论待回填 | — |
