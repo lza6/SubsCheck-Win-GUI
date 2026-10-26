@@ -80,6 +80,29 @@ P0/P1 清零 + A1-A7 全过 → 交付。最多 3 轮修复循环。
 
 ---
 
+## 第二轮：独立审查与回归修复（2026-10-26）
+
+### 审查方式
+独立 reviewer 子代理（不继承实现结论）+ 主控自查，从怀疑起点重审 commit cda4ab1。
+
+### 发现并修复（commit 22ed3b3）
+| ID | 级别 | 问题 | 处置 |
+|---|---|---|---|
+| R-1 | **P0 回归** | 凭据 DPAPI 加密破坏外部内核消费：config.yaml 的 webdav/worker/github-token 字段由 subs-check.exe 内核读取执行上传（README §配置说明为证），密文导致上传静默损坏 | 撤回加密恢复明文，留注释警示；CryptoHelper 保留（GenerateApiKey 仍用于随机密钥） |
+| R-2 | P1 回归 | WebUIapiKey 初值 null → timer4 轮询 X-API-Key 传 null 抛异常（原版硬编码恰好掩盖） | ReadConfig 同步赋值 |
+| R-3 | 通过 | checkBox4 双订阅无冲突（原处理器仅设 Enabled） | 无需改 |
+| R-4 | 通过 | SaveConfig 唯一调用点为手动停止路径，无弹窗轰炸 | 无需改 |
+
+### 复验（真实运行）
+- Release Rebuild：`subs-check.win.gui -> bin\Release\subs-check.win.gui.exe`，EXIT=0
+- 冒烟：PID=30272 存活，窗口标题正常
+- 回滚点：22ed3b3 可独立 revert
+
+### 核心教训（已入 cerebrum/buglog）
+config/config.yaml 是 GUI 与外部内核的共享契约文件，任何字段改动前必须确认内核消费方。上轮 A3 验收结论「DPAPI 加密已完成」为**伪闭环**（只验证了 GUI 侧往返，未验证跨进程链路），本轮已修正。
+
+---
+
 ## 执行结果（2026-10-26 终局）
 
 ### 已完成（全部有证据）
