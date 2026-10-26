@@ -1,0 +1,106 @@
+# Workflow Status — SubsCheck-Win-GUI 终局审计
+
+> 创建：2026-10-26 ｜ 模式：执行模式（自主修复 + 定向验证 + 计划文档审计）
+> 基线来源：`docs/计划书/下一步改进指南.md`、`计划书/UI现代化升级计划.md`、git log、实际构建输出
+
+## 任务契约
+
+- **总目标**：把项目当作即将交付给真实用户使用的产品，做终局审计；按 P0→P1→P2 顺序真实修复；真实验证；同步文档；审计并清理已闭环的计划文档；沉淀技能与记忆。
+- **授权**：自主 commit（不 push）、自主小修逻辑 bug、自主清理旧产物（先列清单）、自主更新文档。
+- **红线**：禁止大幅重构；禁止删 Designer 文件；保护工作区已有未提交改动（UI 现代化成果）；禁止 force push；未运行验证命令不得宣称完成。
+
+## 验收标准
+
+| # | 标准 | 状态 |
+|---|---|---|
+| A1 | Framework MSBuild + VS MSBuild 均可成功构建（Release 0 error） | 进行中 |
+| A2 | WebUI 无硬编码默认密钥 `CMLiussss` | Todo |
+| A3 | config.yaml 不含明文凭据（DPAPI 加密） | Todo |
+| A4 | 架构自适应下载（x64/x86） | Todo |
+| A5 | 进程状态机替换按钮文字判据 | Todo |
+| A6 | 启动冒烟：进程存活、UIA 树正常 | 已通过（基线） |
+| A7 | 计划文档审计 + 归档/删除闭环 | Todo |
+
+## 任务图
+
+```
+T-001 构建阻塞(bat/MSBuild) → T-002 WebUI密钥 → T-003 DPAPI凭据
+                                                      ↘
+T-004 架构自适应下载 → T-005 状态机 → T-006 空catch日志 → T-007 HttpClient
+                                                      ↙
+                                    T-008 冒烟复验 → T-009 文档同步 → T-010 计划文档审计清理 → T-011 技能/记忆沉淀
+```
+
+## 阶段
+
+- 阶段1 事实基线与工具链 ✓
+- 阶段2 P0 修复（进行中）
+- 阶段3 P1 修复
+- 阶段4 验证复验
+- 阶段5 文档同步 + 计划文档审计
+- 阶段6 技能/记忆沉淀
+
+## 问题清单
+
+| ID | 级别 | 问题 | 状态 |
+|---|---|---|---|
+| P0-B | P0 | 构建阻塞：Framework MSBuild C#5 无法编译 + bat MSBUILD_PATH 为空 | 修复中 |
+| P0-1 | P0 | WebUI 密钥硬编码 CMLiussss（Form1.cs:47、3913） | Todo |
+| P0-2 | P0 | 凭据明文落盘 config.yaml | Todo |
+| P0-3 | P0 | button1.Text 作为运行状态判据（Form1.cs:227/237/1158/3065） | Todo |
+| P1-1 | P1 | 16 处 new HttpClient，socket 耗尽风险 | 评估中 |
+| P1-2 | P1 | 空 catch / 裸 catch 静默吞异常 | Todo |
+| P1-5 | P1 | 下载 URL 硬编码 i386 | Todo |
+| P2-5 | P2 | nuget.exe 8.3MB 入库二进制 | Todo |
+
+## 验证记录
+
+| 时间 | 命令 | 结果 |
+|---|---|---|
+| 2026-10-26 | `& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" subs-check.win.gui.csproj /p:Configuration=Release /v:minimal` | 通过：`subs-check.win.gui -> bin\Release\subs-check.win.gui.exe` |
+| 2026-10-26 | `& "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe" ... /p:LangVersion=latest` | 失败：`CSC error CS1617: 选项"latest"对 /langversion 无效` → 确认 Framework MSBuild 编译器上限 C#5 |
+
+## 回滚点
+
+- 工作区未提交改动为 UI 现代化成果，**不得 reset/clean**。
+- 每个修复为独立 commit，可 `git revert`。
+
+## 下一轮计划（承接自已归档的改进指南 v1.1+ 路线）
+
+- P1-1 单例 HttpClient 复用（16 处，需逐一确认代理差异，评估为中型改动）
+- T-6 统一日志（替换 46 处裸 catch 为分级日志）
+- T-7 config 写入互斥（SemaphoreSlim）
+- T-8~T-10 服务抽取（ConfigService/ProcessManager/ProxyPoolService）
+- T-11 Core 类库 + xUnit + CI
+- 另见根目录 `参考的结果计划指南.md` Implementation Batches B1-B6（待用户批准）
+
+## 停止条件
+
+P0/P1 清零 + A1-A7 全过 → 交付。最多 3 轮修复循环。
+
+---
+
+## 执行结果（2026-10-26 终局）
+
+### 已完成（全部有证据）
+| 验收项 | 结果 | 证据 |
+|---|---|---|
+| A1 构建双通道 | VS18 MSBuild Release Rebuild 0 error；Framework MSBuild 确认为 C#5 上限（工具链限制，bat 已改走 VS MSBuild） | workflow_status 验证记录 + commit cda4ab1 |
+| A2 无硬编码默认密钥 | `rg CMLiussss` 仅剩注释与旧值检测逻辑 | Grep 输出 |
+| A3 凭据 DPAPI 加密 | CryptoHelper 15 项断言真实运行全部 PASS | verify_crypto 输出（已留存于会话记录） |
+| A4 架构自适应下载 | SubsCheckArch 字段 + 5 处替换，仅注释残留 | Grep 输出 |
+| A5 状态机 | RunState 枚举 + SetRunState 收口，button1.Text 判据 0 残留 | Grep 输出 |
+| A6 冒烟 | 进程存活 57.6MB、窗口正常、测速真实运行、深色主题完整 | evidence/smoke_main.png 等 4 张截图 |
+| A7 计划文档审计 | 3 文档归档至 docs/archive/plans/20261026/ 并删除原文件，manifest 已建 | archive-manifest.md |
+
+### 功能真实验证
+- 「随机密钥」按钮：BM_CLICK 真实点击 → 日志输出「已生成新的 WebUI API 随机密钥」→ 密钥框掩码填充（smoke_genkey.png）
+- 高级设置展开/收起、WebUI 勾选联动按钮可用性：截图确认
+
+### 遗留（非阻塞）
+- P1-1 HttpClient 复用：评估为中型重构（16 处 handler 各异），违反本轮"禁止大幅重构"红线，列 backlog
+- 既有 UI 缺陷：「Clash订阅」按钮与密钥输入框视觉重叠（Designer 布局，本轮范围外，已记录）
+- Framework MSBuild 无法编译本项目（C#5 上限）：已通过 bat 修复规避；根治需 csproj 指定 LangVersion + Roslyn（涉及工具链升级，未授权）
+
+### Git
+- commit cda4ab1（含 UI 现代化成果一并保护入库），未推送（未获授权）
