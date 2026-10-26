@@ -193,3 +193,16 @@ P0/P1 清零 ✅ 构建验证 ✅ 审查闭环 ✅ 文档同步 ✅ HTML 报告+
 | 提交 | 2f907fe（19 files, +1290/-294） | git log |
 | 独立审查 | reviewer 子代理进行中，结论待回填 | — |
 | 推送/发布 | 待审查 Approve 后执行 | — |
+
+## 第五轮收尾（2026-10-26 深夜）
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 独立审查第一轮 | Request Changes（C1 条件字段残留/C2 跨线程/R1-R3） | reviewer 报告 |
+| 审查修复 | C1 removeKeys/C2 BeginInvoke/R1 异常包装/R2 锁+Guid tmp/R3 计数复位+告警降级 | commit bd2bc1e |
+| 测试 | 12→14 用例，vstest 14/14 | vstest 输出 |
+| 复验 | Verdict: Approve（6 修复点全 PASS，无新引入问题） | reviewer 复验报告 |
+| 推送 | 31b2eb6..bd2bc1e → origin/master | push 输出 |
+| 发布 | tag v2.1.0 + Release | https://github.com/lza6/SubsCheck-Win-GUI/releases/tag/v2.1.0 |
+
+## 最终状态：B1-B6 全闭环 + 审查 Approve + 已发布
